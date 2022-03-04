@@ -58,6 +58,13 @@ instruction *find( decoder_t *table, word *opcode ) {
   return ptr->inst;
 }
 ```
+Some final comments:
+
+* The table output will come to a leaf node before all bits have been checked, if it needs to check no more bits.  This means that it is possible to miss-identify an instruction if the input data is not complete.
+* The program will try to confirm consistency of the input data, and will output errors (to stderr) as it detects them, and sets the exit code of the program to a non-zero value after producing the table.
+* The table output contains additional code comments providing details about the table.  These are mostly the index number of the table row, the line number where the source for a leaf node was found and (in `[]`) how many opcodes resolved to this instruction.
+* The emphasis is essentially to get the input table complete and correct.
+
 
 The following is taken for the source code as a more complete description of the record formats supported (note W record affects the number of fields in the table output):
 
