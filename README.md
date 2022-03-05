@@ -7,7 +7,7 @@ This program was throwwn together to facilitate generating a 'decision' table th
 
 For example when supplied the following input data:
 ```
-{S8
+{Z8
 {F op_
 {I 00000000 nop
 {I 0001.... add
@@ -38,7 +38,7 @@ Data interpreted by the program starts after a brace (`{`) and runs to the end o
 
 The first character after the open brace indicates the content of the record, and determines the format for the content of the record.
 
-`{S n}` tells the program how many bits (n) form a unit of opcode data.  This will typically be either 8 or 16, but can be any modest positive number.
+`{Z n}` tells the program how many bits (n) form a unit of opcode data.  This will typically be either 8 or 16, but can be any modest positive number.
 
 `{F f}` tells the program how to decorate/format the name when outputting it.
 
@@ -82,10 +82,10 @@ The following is taken for the source code as a more complete description of the
  *
  *	Input data types:
  *
- *	S	Provide the number of bits which form an instruction
- *		unit (typically 8 or 16).
+ *	Z	Provide the number of bits which define the size of an
+ *		instruction (typically 8 or 16).
  *
- * 			{S 8}
+ * 			{Z 8}
  *
  * 		Only ONE per instruction set, must be set before first
  *		instruction definition.
@@ -116,6 +116,8 @@ The following is taken for the source code as a more complete description of the
  *		spaces are automatically removed.
  *
  * 	T	Provide the name of the array type, defaults "decoder_t".
+ *
+ *	S	Define the scope of the table, defaults to 'static'.
  *
  * 	N	Provide the name of the array (of the above type), defaults
  * 		"decoder".
