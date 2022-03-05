@@ -1,11 +1,12 @@
 AVR Instruction Encoding
 ========================
 
-This data has been distilled from two main sources:
+This data has been distilled from these sources:
 
-	(1)	https://en.wikipedia.org/wiki/Atmel_AVR_instruction_set
-and
-	(2)	http://ww1.microchip.com/downloads/en/devicedoc/atmel-0856-avr-instruction-set-manual.pdf
+	https://en.wikipedia.org/wiki/Atmel_AVR_instruction_set
+	
+	http://ww1.microchip.com/downloads/en/devicedoc/atmel-0856-avr-instruction-set-manual.pdf
+	https://ww1.microchip.com/downloads/en/DeviceDoc/AVR-Instruction-Set-Manual-DS40002198A.pdf
 
 In explanation:
 
@@ -13,7 +14,7 @@ In explanation:
 	encoding, and potentially offered a mechanism to allow analysis of
 	the encoding system.
 	
-	The Microchip Atmel document, being the final authority on the subject,
+	The Microchip Atmel documents, being the final authority on the subject,
 	provided the means to verify the content of the resulting data (subject
 	to the acknowledgment that I have done this without external confirmation).
 
@@ -41,10 +42,54 @@ KKKKKKKK= 8-bit constant
 AVR Instruction Table
 =====================
 
-{S 16					}
+{ //
+{ //	AVR_Decoder.cpp
+{ //	===============
+{ //
+{ //	Containing only the decoder table generated
+{ //	by 'encode_decoder' from the data file
+{ //	'AVR_instructions.txt'.
+{ //
+{
+{ //
+{ //	Include the definitions required for the
+{ //	table to compile.
+{ //
+{ #include "AVR_Decoder.h"
+{
+{ //
+{ //	Define the decoder node type.
+{ //
+{ typedef struct {
+{ 	word		mask,		// Which bit do we test (no word index required).
+{ 			jump;		// How many to jump if bit is 1.
+{ 	function_code	code;		// The routine to return when we complete decoding.
+{ \} decoder_entry;
+{
+{ //
+{ //	Pre-declare the decoder table, as the lookup
+{ //	function will require it.
+{ //
+{ static decode_entry decode_table[];
+{
+{ //
+{ //	The lookup function.
+{ //
+{ function_code decode_opcode( word opcode ) {
+{ 	decode_entry	*ptr;
+{ 	word		test;
+{
+{ 	ptr = decode_table;
+{ 	while(( test = ptr->mask )) ptr += ( opcode & test )? ptr->jump: 1;
+{ 	return( ptr->code );
+{ \}
+{
+
+{Z 16					}
 {W 1					}
 {L C++					}
 {T decode_entry				}
+{S static				}
 {N decode_table				}
 {F op_					}
 
@@ -90,11 +135,18 @@ AVR Instruction Table
 {I 1001000ddddd1110 ld_nx		} LD Rd,-X		Rd = DS(-X)
 {I 1001000ddddd1111 pop			} POP Rd		Rd = DS(+STACK)
 
-{I 10q0qq0ddddd1qqq ld_y_q		} LD RD,Y+q		Rd = DS(Y+q)			("LD Rd,Y" is "LD Rd,Y+0")
+Note:
+	Documentation indicates that there are mnemonics for the
+	instructions 'LD Rd,Y' and 'LD Rd,Z'.  However examining
+	the binary opcode itself, these instructions should be
+	recognised as actually being an alias for the instructions
+	'LD RD,Y+0' and 'LD Rd,Z+0'
+
+{I 10q0qq0ddddd1qqq ld_y_q		} LD RD,Y+q		Rd = DS(Y+q)			(See Note)
 {I 1001000ddddd1001 ld_yp		} LD Rd,Y+		Rd = DS(Y+)
 {I 1001000ddddd1010 ld_ny		} LD Rd,−Y		Rd = DS(-Y)
 
-{I 10q0qq0ddddd0qqq ld_z_q		} LD Rd,Z+q		Rd = DS(Z+q)			("LD Rd,Z" is "LD Rd,Z+0")
+{I 10q0qq0ddddd0qqq ld_z_q		} LD Rd,Z+q		Rd = DS(Z+q)			(See Note)
 {I 1001000ddddd0001 ld_zp		} LD Rd,Z+		Rd = DS(Z+)
 {I 1001000ddddd0010 ld_nz		} LD Rd,−Z		Rd = DS(-Z)
 
@@ -110,11 +162,18 @@ AVR Instruction Table
 {I 1001001ddddd1110 st			} ST -X,Rd		DS(-X) = Rd
 {I 1001001ddddd1111 push		} PUSH Rd		DS(STACK-) = Rd
 
-{I 10q0qq1rrrrr1qqq std_y_q		} STD Y+q,Rd		DS(Y+q) = Rd			("ST Y,Rd" is "ST Y+0,Rd")
+Note:
+	Documentation indicates that there are mnemonics for the
+	instructions 'ST Y,Rd' and 'ST Z,Rd'.  However examining
+	the binary opcode itself, these instructions should be
+	recognised as actually being an alias for the instructions
+	'ST Y+0,Rd' and 'ST Z+0,Rd'
+
+{I 10q0qq1rrrrr1qqq std_y_q		} STD Y+q,Rd		DS(Y+q) = Rd			(See Note)
 {I 1001001ddddd1001 st_yp		} ST Y+,Rd		DS(Y+) = Rd
 {I 1001001ddddd1010 st_ny		} ST −Y,Rd		DS(-Y) = Rd
 
-{I 10q0qq1rrrrr0qqq std_z_q		} STD Z+q,Rd		DS(Z+q) = Rd			("ST Z,Rd" is "ST Z+0,Rd")
+{I 10q0qq1rrrrr0qqq std_z_q		} STD Z+q,Rd		DS(Z+q) = Rd			(See Note)
 {I 1001001ddddd0001 st_zp		} ST Z+,Rd		DS(Z+) = Rd
 {I 1001001ddddd0010 st_nz		} ST −Z,Rd		DS(-Z) = Rd
 
