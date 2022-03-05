@@ -148,5 +148,9 @@ The following is taken for the source code as a more complete description of the
  * 	[space]
  * 	[tab]	Content of the record is passed through to the output "as is"
  * 		before the content of the table is generated.
+ *
+ * 	_	[Underscore]
+ * 		Content of the record is passed through to the output "as is"
+ * 		AFTER the content of the table is generated.
  */
 ```
