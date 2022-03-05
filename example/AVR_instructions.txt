@@ -17,9 +17,8 @@ In explanation:
 	provided the means to verify the content of the resulting data (subject
 	to the acknowledgment that I have done this without external confirmation).
 
-The table presented below forms an ordered list (sorted in instruction numerical
-sequence) which provides the foundation for the decoding of AVR instructions
-within the simulator.
+The table presented below forms the list which provides the foundation for the
+decoding of AVR instructions within the simulator.
 
 Bit assignments: 
 
@@ -31,18 +30,10 @@ ddddd	= Destination register
 dddd	= Destination register (R16–R31)
 ddd	= Destination register (R16–R23)
 DDDD	= Destination register pair (R1:R0–R31:R30)
-pp	= Register pair, W, X, Y or Z
-y	= Y/Z register pair bit (0=Z, 1=Y)
-u	= FMUL(S(U)) signed with 0=signed or 1=unsigned
-s	= Store/load bit (0=load, 1=store)
-c	= Call/jump (0=jump, 1=call)
-cy	= With carry (0=without carry, 1=with carry)
-e	= Extend indirect jump/call address with EIND (0=0:Z, 1=EIND:Z)
-q	= Extend program memory address with RAMPZ (0=0:Z, 1=RAMPZ:Z)
+pp	= Register pair W, X, Y or Z (R25:R24, R27:R26, R29:R28, R31:R30)
 aaaaaa	= I/O space address
 aaaaa	= I/O space address (first 32 only)
 bbb	= Bit number (0–7)
-B	= Bit value (0 or 1)
 kkkk	= 4-bit unsigned constant (DES opcode)
 kkkkkk	= 6-bit unsigned constant
 KKKKKKKK= 8-bit constant
@@ -178,8 +169,18 @@ AVR Instruction Table
 {I 1001010kkkkk110k kkkkkkkkkkkkkkkk jmp } JMP k		PC = k
 {I 1001010kkkkk111k kkkkkkkkkkkkkkkk call } CALL k		DS(STACK-) = PC, PC = k
 
+Note:
+	The below 'adiw' and 'sbiw' instructions can be considered to be
+	as (mnemonically) operating against the registers W, X, Y or Z.
+	In this case the instructions would be viewed as:
+
+		ADIW	[WXYZ],k
+	and
+		SBIW	[WXYZ],k
+		
 {I 10010110kkppkkkk adiw		} ADIW Rd,k		Rd+1:Rd += k		(where "d=24+(p<<1)" and k is unsigned 6 bit value) 
-{I 10010111kkppkkkk sbiw		} SBIW Rp,k		Rd+1:Rd -= k		(where "d=24+(p<<1)" and k is unsigned 6 bit value) 
+{I 10010111kkppkkkk sbiw		} SBIW Rp,k		Rd+1:Rd -= k		(where "d=24+(p<<1)" and k is unsigned 6 bit value)
+
 {I 10011000aaaaabbb cbi			} CBI a,b		IO(a)[b] = 0		(Clear bit b in IO register a)
 {I 10011001aaaaabbb sbic		} SBIC a,b		If IO(a)[b] == 0 skip	(Skip next instruction if bit b in IO register a is clear)
 {I 10011010aaaaabbb sbi			} SBI a,b		IO(a)[b] = 1		(Set bit b in IO register a)
