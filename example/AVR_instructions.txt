@@ -52,6 +52,11 @@ AVR Instruction Table
 { //
 {
 { //
+{ //	Include standard stuff.
+{ //
+{ #include <stdlib.h>
+{
+{ //
 { //	Include the definitions required for the
 { //	table to compile.
 { //
@@ -66,29 +71,28 @@ AVR Instruction Table
 { 	function_code	code;		// The routine to return when we complete decoding.
 { \} decoder_entry;
 {
-{ //
-{ //	Pre-declare the decoder table, as the lookup
-{ //	function will require it.
-{ //
-{ static decoder_entry decode_table[];
-{
-{ //
-{ //	The lookup function.
-{ //
-{ function_code decode_opcode( word opcode ) {
-{ 	decoder_entry	*ptr;
-{ 	word		test;
-{
-{ 	ptr = decode_table;
-{ 	while(( test = ptr->mask )) ptr += ( opcode & test )? ptr->jump: 1;
-{ 	return( ptr->code );
-{ \}
-{
+
+{_
+{_//
+{_//	The lookup function.
+{_//
+{_function_code decode_opcode( word opcode ) {
+{_	decoder_entry	*ptr;
+{_	word		test;
+{_
+{_	ptr = decode_table;
+{_	while(( test = ptr->mask )) ptr += ( opcode & test )? ptr->jump: 1;
+{_	return( ptr->code );
+{_\}
+{_
+{_//
+{_//	EOF
+{_//
 
 {Z 16					}
 {W 1					}
 {L C++					}
-{T decode_entry				}
+{T decoder_entry			}
 {S static				}
 {N decode_table				}
 {F op_					}
