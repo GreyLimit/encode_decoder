@@ -93,6 +93,10 @@
  * 	[space]
  * 	[tab]	Content of the record is passed through to the output "as is"
  * 		before the content of the table is generated.
+ *
+ * 	_	[Underscore]
+ * 		Content of the record is passed through to the output "as is"
+ * 		AFTER the content of the table is generated.
  */
 
 /*
@@ -116,6 +120,7 @@
 #define ARGUMENT_BIT		'.'
 #define SPACE			' '
 #define TAB			'\t'
+#define UNDERSCORE		'_'
 #define NL			'\n'
 #define EOS			'\0'
 #define ESCAPE_SYMBOL		'\\'
@@ -221,6 +226,16 @@ NODE {
 			*one;
 };
 
+/*
+ *	Define a record to hold those lines of data which need
+ *	to be output AFTER the table has been created.
+ */
+#define FINISH struct finish
+FINISH {
+	char	*data;
+	FINISH	*next;
+};
+
 /************************************************
  *						*
  *	GLOBAL VARIABLES DEFINED HERE		*
@@ -265,6 +280,13 @@ static char		*error_handler = NULL;
 static char		*data_type = NULL;
 static char		*data_scope = NULL;
 static char		*data_name = NULL;
+
+/*
+ *	The tail/finish data to be output after
+ * 	the table.
+ */
+static FINISH		*finish_data = NULL,
+			**finish_data_tail = &( finish_data );
 
 /*
  *	All the instructions can be found here.
@@ -550,6 +572,17 @@ static bool process( int line, char *input, char *comment ) {
 			printf( "\n" );
 			break;
 		}
+		case UNDERSCORE: {
+			/*
+			 *	Add more data to the end of the file.
+			 */
+			 FINISH *ptr = NEW( FINISH );
+			 ptr->data = DUP( input );
+			 ptr->next = NULL;
+			 *finish_data_tail = ptr;
+			 finish_data_tail = &( ptr->next );
+			 break;
+		 }
 		case INSTRUCTION_RECORD: {
 			INSTRUCTION	*p;
 
@@ -1113,6 +1146,14 @@ int main( int argc, char *argv[]) {
 		printf( "%s\tEnd Of Table\n", output_comment_a );
 		printf( "%s\t============\n", output_comment_a );
 		printf( "%s\n", output_comment_a );
+	}
+
+	/*
+	 * 	Output all of the finish data..
+	 */
+	while( finish_data ) {
+		printf( "%s\n", finish_data->data );
+		finish_data = finish_data->next;
 	}
 
 	/*
