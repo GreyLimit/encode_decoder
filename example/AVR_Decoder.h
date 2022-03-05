@@ -16,7 +16,7 @@
 //	pointers to functions we are storing
 //	and returning.
 //
-typedef void (*function_code)( AVR_State *state );
+typedef void (*function_code)( word opcode, AVR_State *state );
 
 //
 //	Declare the look up functions (whose code
