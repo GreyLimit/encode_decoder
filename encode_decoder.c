@@ -1,25 +1,15 @@
 /*
-    Program to create conversion table from CPU opcodes to instructions
-    Copyright (C) 2022  Jeff Penfold (jeff.penfold@googlemail.com).
-
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
- *	Encode
+ *	encode_decoder
+ *	==============
  *
  *	Program to process an input stream of Assembly Language
  *	definitions and output C/C++ source code providing a
  *	mechanism to decode those instructions.
+ *
+ *	Usage:
+ *		encode_decoder < input_stream > output_stream
+ *	or
+ *		encode_decoder input_file > output_stream
  */
 
 #include <stdio.h>
@@ -37,10 +27,10 @@
  *
  *	Input data types:
  *
- *	S	Provide the number of bits which form an instruction
- *		unit (typically 8 or 16).
+ *	Z	Provide the number of bits which define the size of an
+ *		instruction (typically 8 or 16).
  *
- * 			{S 8}
+ * 			{Z 8}
  *
  * 		Only ONE per instruction set, must be set before first
  *		instruction definition.
@@ -71,6 +61,8 @@
  *		spaces are automatically removed.
  *
  * 	T	Provide the name of the array type, defaults "decoder_t".
+ *
+ *	S	Define the scope of the table, defaults to 'static'.
  *
  * 	N	Provide the name of the array (of the above type), defaults
  * 		"decoder".
@@ -109,10 +101,11 @@
  */
 #define BEGIN_RECORD		'{'
 #define END_RECORD		'}'
-#define SIZE_RECORD		'S'
+#define SIZE_RECORD		'Z'
 #define INSTRUCTION_RECORD	'I'
 #define FORMAT_RECORD		'F'
 #define TYPE_RECORD		'T'
+#define SCOPE_RECORD		'S'
 #define NAME_RECORD		'N'
 #define LANGUAGE_RECORD		'L'
 #define ERROR_RECORD		'E'
@@ -122,6 +115,7 @@
 #define ZERO_BIT		'0'
 #define ARGUMENT_BIT		'.'
 #define SPACE			' '
+#define TAB			'\t'
 #define NL			'\n'
 #define EOS			'\0'
 #define ESCAPE_SYMBOL		'\\'
@@ -269,6 +263,7 @@ static char		*error_handler = NULL;
  *	Output data type record and decode name.
  */
 static char		*data_type = NULL;
+static char		*data_scope = NULL;
 static char		*data_name = NULL;
 
 /*
@@ -313,14 +308,14 @@ static bool isopcode( int c ) {
 static bool process( int line, char *input, char *comment ) {
 	char	record;
 	
-	switch(( record = *input )) {
+	switch(( record = *input++ )) {
 		case SIZE_RECORD: {
 			int	i;
 
 			/*
 			 *	S nnn	Provide number of bits per word of instruction
 			 */
-			i = atoi( input+1 );
+			i = atoi( input );
 			if(( i <= 0 )||( i > ( sizeof( word ) << 3 ))) {
 				fprintf( stderr, "Invalid word size %d.\n", i );
 				return( FALSE );
@@ -340,7 +335,7 @@ static bool process( int line, char *input, char *comment ) {
 			 *	W nnn	Provide maximum number of words required to
 			 *		identify an instruction.
 			 */
-			i = atoi( input+1 );
+			i = atoi( input );
 			if(( i <= 0 )||( i > MAX_CODES )) {
 				fprintf( stderr, "Invalid number of words %d.\n", i );
 				return( FALSE );
@@ -366,7 +361,6 @@ static bool process( int line, char *input, char *comment ) {
 			/*
 			 *	Strip spaces...
 			 */
-			input += 1;
 			p = input;
 			while( *p != EOS ) {
 				if( isvisible( *p )) {
@@ -409,7 +403,6 @@ static bool process( int line, char *input, char *comment ) {
 			/*
 			 *	Strip spaces...
 			 */
-			input += 1;
 			p = input;
 			while( *p != EOS ) {
 				if( isvisible( *p )) {
@@ -456,7 +449,6 @@ static bool process( int line, char *input, char *comment ) {
 			/*
 			 *	Strip spaces...
 			 */
-			input += 1;
 			p = input;
 			while( *p != EOS ) {
 				if( isvisible( *p )) {
@@ -481,13 +473,42 @@ static bool process( int line, char *input, char *comment ) {
 			data_type = DUP( input );
 			break;
 		}
+		case SCOPE_RECORD: {
+			char	*p, *q, *r;
+			
+			/*
+			 *	Strip spaces...
+			 */
+			p = input;
+			while( *p != EOS ) {
+				if( isvisible( *p )) {
+					p++;
+				}
+				else {
+					/*
+					 *	Roll out the white space.
+					 */
+					q = p;
+					r = p+1;
+					while(( *q++ = *r++ ));
+				}
+			}
+			if( *input == EOS ) {
+				fprintf( stderr, "No scope found.\n" );
+				return( FALSE );
+			}
+			if( data_scope ) {
+				fprintf( stderr, "Scope already set.\n" );
+			}
+			data_scope = DUP( input );
+			break;
+		}
 		case NAME_RECORD: {
 			char	*p, *q, *r;
 			
 			/*
 			 *	Strip spaces...
 			 */
-			input += 1;
 			p = input;
 			while( *p != EOS ) {
 				if( isvisible( *p )) {
@@ -512,12 +533,21 @@ static bool process( int line, char *input, char *comment ) {
 			data_name = DUP( input );
 			break;
 		}
-		case ' ':
-		case '\t': {
+		case SPACE:
+		case TAB: {
 			/*
 			 *	Pass through "as is".
 			 */
 			printf( "%s\n", input );
+			break;
+		}
+		case EOS: {
+			/*
+			 *	Special case of "pass through": a
+			 *	record start symbol as the last
+			 *	character in a line.
+			 */
+			printf( "\n" );
 			break;
 		}
 		case INSTRUCTION_RECORD: {
@@ -542,7 +572,6 @@ static bool process( int line, char *input, char *comment ) {
 			 *	Fill in the record; start by breaking the input up into
 			 *	space separated units (but still ignoring initial spaces).
 			 */
-			input += 1;
 			while(( *input )&&( !isvisible( *input ))) input += 1;
 			while( *input ) {
 				char	*e;
@@ -1021,6 +1050,7 @@ int main( int argc, char *argv[]) {
 	if( output_comment_a == NULL ) output_comment_a = "/*";
 	if( output_comment_b == NULL ) output_comment_b = "*/";
 	if( data_type == NULL ) data_type = "decoder_t";
+	if( data_scope == NULL ) data_scope = "static";
 	if( data_name == NULL ) data_name = "decoder";
 	if( error_handler == NULL ) error_handler = "illegal";
 		
@@ -1044,9 +1074,46 @@ int main( int argc, char *argv[]) {
 	/*
 	 *	Display the decode tree as an organised array
 	 */
-	printf( "%s %s[ %d ] = {\n", data_type, data_name, table_size );
+	if( strlen( output_comment_b )) {
+		/*
+		 *	C style start to end comments
+		 */
+		printf( "%s\n", output_comment_a );
+		printf( "\tStart Of Table\n" );
+		printf( "\t==============\n" );
+		printf( "%s\n", output_comment_b );
+	}
+	else {
+		/*
+		 *	C++ style start to end comments
+		 */
+		printf( "%s\n", output_comment_a );
+		printf( "%s\tStart Of Table\n", output_comment_a );
+		printf( "%s\t==============\n", output_comment_a );
+		printf( "%s\n", output_comment_a );
+	}
+	printf( "%s %s %s[ %d ] = {\n", data_scope, data_type, data_name, table_size );
 	(void)emit_decoder( tree, table_size );
 	printf( "};\n" );
+	printf( "\n" );
+	if( strlen( output_comment_b )) {
+		/*
+		 *	C style start to end comments
+		 */
+		printf( "%s\n", output_comment_a );
+		printf( "\tEnd Of Table\n" );
+		printf( "\t============\n" );
+		printf( "%s\n", output_comment_b );
+	}
+	else {
+		/*
+		 *	C++ style start to end comments
+		 */
+		printf( "%s\n", output_comment_a );
+		printf( "%s\tEnd Of Table\n", output_comment_a );
+		printf( "%s\t============\n", output_comment_a );
+		printf( "%s\n", output_comment_a );
+	}
 
 	/*
 	 *	Output a status line.
