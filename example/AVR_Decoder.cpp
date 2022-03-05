@@ -26,13 +26,13 @@ typedef struct {
 //	Pre-declare the decoder table, as the lookup
 //	function will require it.
 //
-static decode_entry decode_table[];
+static decoder_entry decode_table[];
 
 //
 //	The lookup function.
 //
 function_code decode_opcode( word opcode ) {
-	decode_entry	*ptr;
+	decoder_entry	*ptr;
 	word		test;
 
 	ptr = decode_table;
