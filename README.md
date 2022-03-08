@@ -1,5 +1,5 @@
 # encode_decoder
-A rough-n-ready program to generate a table to enable software to decode CPU instructions
+A rough-n-ready program to generate a table to enable software to decode CPU instructions.  It would seem that the more I try to use this inn a real situation the more 'tweaking' needs applying
 
 I'm not putting a great deal of effort into publishing this as I wrote it to support me in writinng another program.  But here goes:-
 
@@ -131,7 +131,9 @@ The following is taken for the source code as a more complete description of the
  *
  * 	E	provide the name of a routine to be placed into the decoding
  * 		tree in the event that decoding does not reach a formal
- *		instruction (defaults "illegal")
+ *		instruction.  If *not* defined then decoding stops at the
+ *		nearest valid opcode and the output table includes details
+ *		of where the ambiguity is.
  *
  * 			{E illegal_inst}
  *
@@ -153,4 +155,5 @@ The following is taken for the source code as a more complete description of the
  * 		Content of the record is passed through to the output "as is"
  * 		AFTER the content of the table is generated.
  */
+
 ```
