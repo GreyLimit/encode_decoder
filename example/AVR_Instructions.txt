@@ -61,6 +61,7 @@ AVR Instruction Table
 { //	table to compile.
 { //
 { #include "AVR_Decoder.h"
+{ #include "AVR_Instructions.h"
 {
 { //
 { //	Define the decoder node type.
@@ -241,8 +242,8 @@ Note:
 	and
 		SBIW	[WXYZ],k
 		
-{I 10010110kkppkkkk adiw		} ADIW Rd,k		Rd+1:Rd += k		(where "d=24+(p<<1)" and k is unsigned 6 bit value) 
-{I 10010111kkppkkkk sbiw		} SBIW Rp,k		Rd+1:Rd -= k		(where "d=24+(p<<1)" and k is unsigned 6 bit value)
+{I 10010110kkddkkkk adiw		} ADIW Rd,k		Rd+1:Rd += k		(where "d=24+(dd<<1)" and k is unsigned 6 bit value) 
+{I 10010111kkddkkkk sbiw		} SBIW Rp,k		Rd+1:Rd -= k		(where "d=24+(dd<<1)" and k is unsigned 6 bit value)
 
 {I 10011000aaaaabbb cbi			} CBI a,b		IO(a)[b] = 0		(Clear bit b in IO register a)
 {I 10011001aaaaabbb sbic		} SBIC a,b		If IO(a)[b] == 0 skip	(Skip next instruction if bit b in IO register a is clear)
