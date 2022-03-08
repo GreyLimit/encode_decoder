@@ -124,6 +124,15 @@
 #define NL			'\n'
 #define EOS			'\0'
 #define ESCAPE_SYMBOL		'\\'
+#define QUESTION		'?'
+
+/*
+ *	defines that shape the output of unmatched bits.,
+ */
+#define PLACE_PATTERN		0x88888888
+#define PLACE_MARK		'+'
+#define PLACE_GAP		'-'
+#define PLACE_VARIABLE		'?'
 
 
 /*
@@ -182,7 +191,8 @@ INSTRUCTION {
 	word		opcode[ MAX_CODES ],		/* The instruction construction.		*/
 			mask[ MAX_CODES ];		/* Indicate those bits which are instruction	*/
 	char		*description[ MAX_CODES ];	/* Copy of the original bit description		*/
-	int		duplicates;			/* How many versions of this instruction?	*/
+	int		matches;			/* How many versions of this instruction?	*/
+	word		unmatched[ MAX_CODES ];		/* The mask giving the bits that are undefined. */
 	/*
 	 *	We will daisy chain the records together
 	 *	as a flexible mechanism for keeping them
@@ -597,7 +607,8 @@ static bool process( int line, char *input, char *comment ) {
 			for( int i = 0; i < MAX_CODES; p->opcode[ i++ ] = 0 );
 			for( int i = 0; i < MAX_CODES; p->mask[ i++ ] = 0 );
 			for( int i = 0; i < MAX_CODES; p->description[ i++ ] = NULL );
-			p->duplicates = 0;
+			for( int i = 0; i < MAX_CODES; p->unmatched[ i++ ] = 0 );
+			p->matches = 0;
 			p->next = NULL;
 			*instruction_tail = p;
 			instruction_tail = &( p->next );
@@ -753,13 +764,16 @@ static NODE *insert( word *mask, INSTRUCTION *list, int count ) {
 		 */
 		count = 0;
 		for( int i = 0; i < MAX_CODES; i++ ) {
-			t = mask[ i ] & list->mask[ i ];
+			list->unmatched[ i ] = t = mask[ i ] & list->mask[ i ];
 			for( int j = 0; j < word_size; j++ ) {
 				if( t & 1 ) count++;
 				t >>= 1;
 			}
 		}
-		list->duplicates = ( count > 0 )?( 1 << count ):0;
+		/*
+		 *	Save the match criteria for later
+		 */
+		list->matches = 1 << count;
 		/* Leaf node time! */
 		here = NEW( NODE );
 		here->index = 0;
@@ -904,6 +918,7 @@ static int sequence( NODE *node, int index ) {
  */
 static int emit_decoder( NODE *node, int left ) {
 	char		sep;
+	word		look;
 
 	sep = ( left > 1 )?',':' ';
 	
@@ -930,7 +945,25 @@ static int emit_decoder( NODE *node, int left ) {
 					printf( " %s", ptr->description[ i ]);
 				}
 			}
-			if( ptr->duplicates ) printf( " [%d]", ptr->duplicates );
+			if( ptr->matches > 1 ) {
+				printf( " [%d", ptr->matches );
+				for( int i = 0; i < MAX_CODES; i++ ) {
+					if( ptr->description[ i ]) {
+						look = 1 << ( strlen( ptr->description[ i ])-1 );
+						printf( " " );
+						while( look ) {
+							if( ptr->unmatched[ i ] & look ) {
+								printf( "%c", PLACE_VARIABLE );
+							}
+							else {
+								printf( "%c", (( look & PLACE_PATTERN )? PLACE_MARK: PLACE_GAP ));
+							}
+							look >>= 1;
+						}
+						printf( "]" );
+					}
+				}
+			}
 			printf( " %s %s\n",
 				ptr->comment,		/* The commentary text associated with this line */
 				output_comment_b );
