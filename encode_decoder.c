@@ -76,7 +76,9 @@
  *
  * 	E	provide the name of a routine to be placed into the decoding
  * 		tree in the event that decoding does not reach a formal
- *		instruction (defaults "illegal")
+ *		instruction.  If *not* defined then decoding stops at the
+ *		nearest valid opcode and the output table includes details
+ *		of where the ambiguity is.
  *
  * 			{E illegal_inst}
  *
@@ -565,6 +567,36 @@ static bool process( int line, char *input, char *comment ) {
 			data_name = DUP( input );
 			break;
 		}
+		case ERROR_RECORD: {
+			char	*p, *q, *r;
+			
+			/*
+			 *	Strip spaces...
+			 */
+			p = input;
+			while( *p != EOS ) {
+				if( isvisible( *p )) {
+					p++;
+				}
+				else {
+					/*
+					 *	Roll out the white space.
+					 */
+					q = p;
+					r = p+1;
+					while(( *q++ = *r++ ));
+				}
+			}
+			if( *input == EOS ) {
+				fprintf( stderr, "No error handler found.\n" );
+				return( FALSE );
+			}
+			if( error_handler ) {
+				fprintf( stderr, "Error handler already set.\n" );
+			}
+			error_handler = DUP( input );
+			break;
+		}
 		case SPACE:
 		case TAB: {
 			/*
@@ -741,8 +773,6 @@ static NODE *insert( word *mask, INSTRUCTION *list, int count ) {
 	 *	Deal with up front cases first.
 	 */
 	if( count == 0 ) {
-		fprintf( stderr, "Decode tree contains empty leaf!\n" );
-		dropped += 1;
 		/* Error Leaf node time! */
 		here = NEW( NODE );
 		here->index = 0;
@@ -771,7 +801,67 @@ static NODE *insert( word *mask, INSTRUCTION *list, int count ) {
 			}
 		}
 		/*
-		 *	Save the match criteria for later
+		 *	How are we handling error/illegal instructions?
+		 */
+		if( count && error_handler ) {
+			/*
+			 *	Error handler defined, so we have to (carefully)
+			 *	force the system to carry on building the
+			 *	decision tree.
+			 *
+			 *	All we need to do here is find the first ambiguous
+			 *	opcode bit, decide which side this instruction goes,
+			 *	for a decision node and repeat recursive call.
+			 *
+			 *	We know that at least one of the unmatched[] elements
+			 *	is non-zero.  That is our target opcode word.
+			 */
+			for( int i = 0; i < MAX_CODES; i++ ) {
+				if( list->unmatched[ i ]) {
+					/*
+					 *	Word i is where we make the decision.
+					 *
+					 *	step j through bits from msb to lsb.
+					 */
+					int j = word_size;
+					while( j-- ) {
+						word t = 1 << j;
+						if( list->unmatched[ i ] & t ) {
+							/*
+							 *	Ambiguous bit found, create new node.
+							 */
+							here = NEW( NODE );
+							here->index = 0;
+							here->leaf = FALSE;
+							here->decoded = NULL;
+							here->op_word = i;
+							here->op_bit = j;
+							mask[ i ] &= ~t;
+							if( list->opcode[ i ] & t ) {
+								/* Pick the ONE side. */
+								here->zero = insert( mask, NULL, 0 );
+								here->one = insert( mask, list, 1 );
+							}
+							else {
+								 /* Pick the ZERO size. */
+								here->zero = insert( mask, list, 1 );
+								here->one = insert( mask, NULL, 0 );
+							}
+							mask[ i ] |= t;
+							return( here );
+						}
+					}
+				}
+			}
+			/*
+			 *	If we fall out here then this IS a programming error.
+			 */
+			fprintf( stderr, "Coding error '%s' line %d.\n", __FILE__, __LINE__ );
+			exit( -1 );
+		}
+		/*
+		 *	No Error handler has been defined, so output this node
+		 *	with the duplication information attached to it.
 		 */
 		list->matches = 1 << count;
 		/* Leaf node time! */
@@ -804,8 +894,8 @@ static NODE *insert( word *mask, INSTRUCTION *list, int count ) {
 	v = FALSE;
 	for( int i = 0; i < MAX_CODES; i++ ) {
 		int j = word_size;
-		while( j ) {
-			word k = 1 << (--j);
+		while( j-- ) {
+			word k = 1 << j;
 			c1 = 0;
 			c0 = 0;
 			if( mask[ i ] & k ) {
@@ -969,14 +1059,19 @@ static int emit_decoder( NODE *node, int left ) {
 				output_comment_b );
 		}
 		else {
+			/*
+			 *	Not a decoded instruction, an illegal one.
+			 */
 			if( maximum_words > 1 ) {
 				printf( "\t{ 0, " );
 			}
 			else {
 				printf( "\t{ " );
 			}
-			printf( "0,0,\t%s }%c\t%s %3d Invalid Instruction %s\n",
+			printf( "0,0,\t%s%s%s }%c\t%s %3d Invalid Instruction %s\n",
+				output_format_a,
 				error_handler,		/* Leaf node function name */
+				output_format_b,
 				sep,
 				output_comment_a,
 				node->index,		/* The index number of this node */
@@ -1118,7 +1213,6 @@ int main( int argc, char *argv[]) {
 	if( data_type == NULL ) data_type = "decoder_t";
 	if( data_scope == NULL ) data_scope = "static";
 	if( data_name == NULL ) data_name = "decoder";
-	if( error_handler == NULL ) error_handler = "illegal";
 		
 	/*
 	 *	Calculate how many instructions have been captured.
