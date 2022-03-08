@@ -97,8 +97,9 @@ AVR Instruction Table
 {S static				}
 {N decode_table				}
 {F op_					}
+{E illegal				}
 
-{I 00000000........ nop			} NOP						(No Operation)
+{I 0000000000000000 nop			} NOP						(No Operation)
 {I 00000001DDDDRRRR movw		} MOVW Rd+1:Rd,Rr+1:Rr	Rd+1:Rd = Rr+1:Rr	(Move register pair)
 {I 00000010ddddrrrr muls		} MULS Rd,Rr		R1:R0 = Rd x Rr		(signed = signed x signed)
 
