@@ -87,7 +87,7 @@ The following is taken for the source code as a more complete description of the
  *
  * 			{Z 8}
  *
- * 		Only ONE per instruction set, must be set before first
+ * 		Only one per instruction set; must be set before first
  *		instruction definition.
  *
  *	I	Provide details of an instruction definition.  This is
@@ -99,7 +99,7 @@ The following is taken for the source code as a more complete description of the
  *
  * 		Where bits of the instruction are arguments to the instruction
  *		(and are therefore not actually part of the instruction) they
- *		should be marked with a period.
+ *		should be marked with a period or letter.
  *
  *			{I 00000000 NOP}
  * 		or
@@ -112,8 +112,11 @@ The following is taken for the source code as a more complete description of the
  *
  * 			{F opcode_%_func}
  *
- * 		Optional, but only definition per instruction set.  Any white
- *		spaces are automatically removed.
+ * 		When no F record has been defined then each record has only
+ *		a single result value (being the instruction named in the I record).
+ *
+ *		If multiple F records are provided then a corresponding number
+ *		of result values are created with the decoding data structure.
  *
  * 	T	Provide the name of the array type, defaults "decoder_t".
  *
@@ -129,21 +132,26 @@ The following is taken for the source code as a more complete description of the
  * 			{L C++}			Select C++
  * 			{L CPP}
  *
+ * 		Given the ability of the pre-processor to output text to
+ *		the target files ahead of the decoding data, it is required
+ *		to make this the first record at head of the input data.
+ *
  * 	E	provide the name of a routine to be placed into the decoding
  * 		tree in the event that decoding does not reach a formal
- *		instruction.  If *not* defined then decoding stops at the
- *		nearest valid opcode and the output table includes details
- *		of where the ambiguity is.
+ *		instruction.
+ *
+ *		If not defined then decoding stops at the nearest valid opcode
+ *		and the output table includes details of where the ambiguity is.
  *
  * 			{E illegal_inst}
  *
- * 	W	Define the maximum number of words required to determine the
+ * 	W	Define the maximum number of words required to determine a
  * 		target instruction.
  *
- * 		IF this is specified as 1 then the output table will NOT
- * 		include a word index (assuming it to be 0 always).
+ * 		If this is specified as 1 then the output table will NOT
+ * 		include a word index (assuming it always be 0).
  *
- *			{W 1}			Index not output
+ *			{W 1}			No index output
  * 		or
  * 			{W 2}			Index output
  *
@@ -151,9 +159,13 @@ The following is taken for the source code as a more complete description of the
  * 	[tab]	Content of the record is passed through to the output "as is"
  * 		before the content of the table is generated.
  *
- * 	_	[Underscore]
- * 		Content of the record is passed through to the output "as is"
+ * 	[Underscore]
+ *	_	Content of the record is passed through to the output "as is"
  * 		AFTER the content of the table is generated.
+ *
+ *	H	Content is passed into the header file with the file name
+ *		either based on the input file (with '.h' applied) or simply
+ *		also sent to stdout with the other output.
  */
 
 ```
