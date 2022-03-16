@@ -9,7 +9,7 @@
  *	Usage:
  *		encode_decoder < input_stream > output_stream
  *	or
- *		encode_decoder input_file > output_stream
+ *		encode_decoder input_file[.suffix]
  */
 
 #include <stdio.h>
@@ -32,7 +32,7 @@
  *
  * 			{Z 8}
  *
- * 		Only ONE per instruction set, must be set before first
+ * 		Only one per instruction set; must be set before first
  *		instruction definition.
  *
  *	I	Provide details of an instruction definition.  This is
@@ -44,7 +44,7 @@
  *
  * 		Where bits of the instruction are arguments to the instruction
  *		(and are therefore not actually part of the instruction) they
- *		should be marked with a period.
+ *		should be marked with a period or letter.
  *
  *			{I 00000000 NOP}
  * 		or
@@ -57,8 +57,11 @@
  *
  * 			{F opcode_%_func}
  *
- * 		Optional, but only definition per instruction set.  Any white
- *		spaces are automatically removed.
+ * 		When no F record has been defined then each record has only
+ *		a single result value (being the instruction named in the I record).
+ *
+ *		If multiple F records are provided then a corresponding number
+ *		of result values are created with the decoding data structure.
  *
  * 	T	Provide the name of the array type, defaults "decoder_t".
  *
@@ -74,21 +77,26 @@
  * 			{L C++}			Select C++
  * 			{L CPP}
  *
+ * 		Given the ability of the pre-processor to output text to
+ *		the target files ahead of the decoding data, it is required
+ *		to make this the first record at head of the input data.
+ *
  * 	E	provide the name of a routine to be placed into the decoding
  * 		tree in the event that decoding does not reach a formal
- *		instruction.  If *not* defined then decoding stops at the
- *		nearest valid opcode and the output table includes details
- *		of where the ambiguity is.
+ *		instruction.
+ *
+ *		If not defined then decoding stops at the nearest valid opcode
+ *		and the output table includes details of where the ambiguity is.
  *
  * 			{E illegal_inst}
  *
- * 	W	Define the maximum number of words required to determine the
+ * 	W	Define the maximum number of words required to determine a
  * 		target instruction.
  *
- * 		IF this is specified as 1 then the output table will NOT
- * 		include a word index (assuming it to be 0 always).
+ * 		If this is specified as 1 then the output table will NOT
+ * 		include a word index (assuming it always be 0).
  *
- *			{W 1}			Index not output
+ *			{W 1}			No index output
  * 		or
  * 			{W 2}			Index output
  *
@@ -96,9 +104,13 @@
  * 	[tab]	Content of the record is passed through to the output "as is"
  * 		before the content of the table is generated.
  *
- * 	_	[Underscore]
- * 		Content of the record is passed through to the output "as is"
+ * 	[Underscore]
+ *	_	Content of the record is passed through to the output "as is"
  * 		AFTER the content of the table is generated.
+ *
+ *	H	Content is passed into the header file with the file name
+ *		either based on the input file (with '.h' applied) or simply
+ *		also sent to stdout with the other output.
  */
 
 /*
@@ -116,10 +128,12 @@
 #define LANGUAGE_RECORD		'L'
 #define ERROR_RECORD		'E'
 #define WORDS_RECORD		'W'
+#define HEADER_RECORD		'H'
 #define INSERT_HERE		'%'
 #define ONE_BIT			'1'
 #define ZERO_BIT		'0'
 #define ARGUMENT_BIT		'.'
+#define PERIOD			'.'
 #define SPACE			' '
 #define TAB			'\t'
 #define UNDERSCORE		'_'
@@ -129,7 +143,7 @@
 #define QUESTION		'?'
 
 /*
- *	defines that shape the output of unmatched bits.,
+ *	defines that shape the output of unmatched bits.
  */
 #define PLACE_PATTERN		0x88888888
 #define PLACE_MARK		'+'
@@ -174,6 +188,12 @@ typedef int bool;
  *	Define the largest input line we are happy to handle.
  */
 #define MAX_BUFFER	256
+
+/*
+ *	Define the maximum number of formats which the program
+ *	will handle.
+ */
+#define MAX_FORMATS	8
 
 /*
  *	Define the data structure used to capture a single instruction
@@ -255,6 +275,15 @@ FINISH {
  ************************************************/
 
 /*
+ *	Define the output streams for the program result.
+ */
+static char		*output_base_name = NULL,
+			*output_source_name = NULL,
+			*output_header_name = NULL;
+static FILE		*output_source = NULL,
+			*output_header = NULL;
+
+/*
  *	Define word size and enabled flag.
  */
 static bool		word_size_set = FALSE;
@@ -271,9 +300,9 @@ static int		maximum_words = MAX_CODES;
  *	Define the output formatting; a in front
  *	b afterwards.
  */
-static bool		enable_comment = FALSE;
-static char		*output_format_a = NULL,
-			*output_format_b = NULL;
+static int		output_formats = 0;
+static char		*output_format_a[ MAX_FORMATS ],
+			*output_format_b[ MAX_FORMATS ];
 
 /*
  *	Define the comment output formatting.
@@ -337,6 +366,19 @@ static bool isopcode( int c ) {
 }
 
 /*
+ *	Output filename construction
+ */
+static char *strcatdup( char *a, const char *b ) {
+	int l = strlen( a ) + strlen( b ) + 1;
+
+	char *r = (char *)malloc( l );
+
+	strcpy( r, a );
+
+	return( strcat( r, b ));
+}
+
+/*
  *	Process a line of input.
  */
 static bool process( int line, char *input, char *comment ) {
@@ -351,11 +393,11 @@ static bool process( int line, char *input, char *comment ) {
 			 */
 			i = atoi( input );
 			if(( i <= 0 )||( i > ( sizeof( word ) << 3 ))) {
-				fprintf( stderr, "Invalid word size %d.\n", i );
+				fprintf( stderr, "Line %d: Invalid word size %d.\n", line, i );
 				return( FALSE );
 			}
 			if( word_size_set ) {
-				fprintf( stderr, "Cannot reset word size.\n" );
+				fprintf( stderr, "Line %d: Cannot reset word size.\n", line );
 				return( FALSE );
 			}	
 			word_size = i;
@@ -371,11 +413,11 @@ static bool process( int line, char *input, char *comment ) {
 			 */
 			i = atoi( input );
 			if(( i <= 0 )||( i > MAX_CODES )) {
-				fprintf( stderr, "Invalid number of words %d.\n", i );
+				fprintf( stderr, "Line %d: Invalid number of words %d.\n", line, i );
 				return( FALSE );
 			}
 			if( maximum_words_set ) {
-				fprintf( stderr, "Cannot reset number of words.\n" );
+				fprintf( stderr, "Line %d: Cannot reset number of words.\n", line );
 				return( FALSE );
 			}	
 			maximum_words = i;
@@ -388,8 +430,8 @@ static bool process( int line, char *input, char *comment ) {
 			/*
 			 *	F ffff[%ffff]
 			 */
-			if(( output_format_a != NULL )||( output_format_b != NULL )) {
-				fprintf( stderr, "Output format already specified.\n" );
+			if( output_formats >= MAX_FORMATS ) {
+				fprintf( stderr, "Line %d: Too many output formats specified (maximum is %d).\n", line, MAX_FORMATS );
 				return( FALSE );
 			}
 			/*
@@ -415,13 +457,14 @@ static bool process( int line, char *input, char *comment ) {
 			}
 			if(( p = strchr( input, INSERT_HERE ))) {
 				*p++ = EOS;
-				output_format_a = DUP( input );
-				output_format_b = DUP( p );
+				output_format_a[ output_formats ] = DUP( input );
+				output_format_b[ output_formats ] = DUP( p );
 			}
 			else {
-				output_format_a = DUP( input );
-				output_format_b = "";
+				output_format_a[ output_formats ] = DUP( input );
+				output_format_b[ output_formats ] = "";
 			}
+			output_formats++;
 			break;
 		}
 		case LANGUAGE_RECORD: {
@@ -455,12 +498,28 @@ static bool process( int line, char *input, char *comment ) {
 				fprintf( stderr, "No language found.\n" );
 				return( FALSE );
 			}
+			/*
+			 *	We have to remember to set up the output files, but only
+			 *	if the base name is non-NULL.
+			 */
 			if( strcasecmp( input, "c" ) == 0 ) {
 				/*
 				 *	C Language
 				 */
 				output_comment_a = "/*";
 				output_comment_b = "*/";
+				if( output_base_name ) {
+					output_header_name = strcatdup( output_base_name, ".h" );
+					output_source_name = strcatdup( output_base_name, ".c" );
+					if(( output_header = fopen( output_header_name, "w" )) == NULL ) {
+						fprintf( stderr, "Unable to open header file '%s'.\n", output_header_name );
+						return( FALSE );
+					}
+					if(( output_source = fopen( output_source_name, "w" )) == NULL ) {
+						fprintf( stderr, "Unable to open header file '%s'.\n", output_source_name );
+						return( FALSE );
+					}
+				}
 			}
 			else {
 				if(( strcasecmp( input, "c++" ) == 0 )||( strcasecmp( input, "cpp" ) == 0 )) {
@@ -469,6 +528,18 @@ static bool process( int line, char *input, char *comment ) {
 					 */
 					output_comment_a = "//";
 					output_comment_b = "";
+					if( output_base_name ) {
+						output_header_name = strcatdup( output_base_name, ".h" );
+						output_source_name = strcatdup( output_base_name, ".cpp" );
+						if(( output_header = fopen( output_header_name, "w" )) == NULL ) {
+							fprintf( stderr, "Unable to open header file '%s' for write.\n", output_header_name );
+							return( FALSE );
+						}
+						if(( output_source = fopen( output_source_name, "w" )) == NULL ) {
+							fprintf( stderr, "Unable to open source file '%s' for write.\n", output_source_name );
+							return( FALSE );
+						}
+					}
 				}
 				else {
 					fprintf( stderr, "Unrecognised language '%s'.\n", input );
@@ -602,7 +673,7 @@ static bool process( int line, char *input, char *comment ) {
 			/*
 			 *	Pass through "as is".
 			 */
-			printf( "%s\n", input );
+			fprintf( output_source, "%s\n", input );
 			break;
 		}
 		case EOS: {
@@ -611,20 +682,27 @@ static bool process( int line, char *input, char *comment ) {
 			 *	record start symbol as the last
 			 *	character in a line.
 			 */
-			printf( "\n" );
+			fprintf( output_source, "\n" );
 			break;
 		}
 		case UNDERSCORE: {
 			/*
 			 *	Add more data to the end of the file.
 			 */
-			 FINISH *ptr = NEW( FINISH );
-			 ptr->data = DUP( input );
-			 ptr->next = NULL;
-			 *finish_data_tail = ptr;
-			 finish_data_tail = &( ptr->next );
-			 break;
-		 }
+			FINISH *ptr = NEW( FINISH );
+			ptr->data = DUP( input );
+			ptr->next = NULL;
+			*finish_data_tail = ptr;
+			finish_data_tail = &( ptr->next );
+			break;
+		}
+		case HEADER_RECORD: {
+			/*
+			 *	Pass through "as is".
+			 */
+			fprintf( output_header, "%s\n", input );
+			break;
+		}
 		case INSTRUCTION_RECORD: {
 			INSTRUCTION	*p;
 
@@ -1017,44 +1095,53 @@ static int emit_decoder( NODE *node, int left ) {
 		
 		if(( ptr = node->decoded )) {
 			if( maximum_words > 1 ) {
-				printf( "\t{ 0, " );
+				fprintf( output_source, "\t{ 0, " );
 			}
 			else {
-				printf( "\t{ " );
+				fprintf( output_source, "\t{ " );
 			}
-			printf( "0,0,\t%s%s%s }%c\t%s %3d[%3d]",
-				output_format_a,
-				ptr->name,		/* Leaf node function name */
-				output_format_b,
-				sep,
-				output_comment_a,
-				node->index,		/* The index number of this node */
-				ptr->line );		/* The line number of the configuration file */
+			fprintf( output_source, "0, 0" );
+			if( output_formats ) {
+				for( int i = 0; i < output_formats; i++ ) {
+					fprintf( output_source, ", %s%s%s",
+							output_format_a[ i ],
+							ptr->name,			/* Leaf node function name */
+							output_format_b[ i ]);
+				}
+			}
+			else {
+				fprintf( output_source, ", %s", ptr->name );		/* Leaf node function name */
+			}
+			fprintf( output_source, " }%c\t%s %3d/%3d",
+					sep,
+					output_comment_a,
+					node->index,		/* The index number of this node */
+					ptr->line );		/* The line number of the configuration file */
 			for( int i = 0; i < MAX_CODES; i++ ) {
 				if( ptr->description[ i ]) {
-					printf( " %s", ptr->description[ i ]);
+					fprintf( output_source, " %s", ptr->description[ i ]);
 				}
 			}
 			if( ptr->matches > 1 ) {
-				printf( " [%d", ptr->matches );
+				fprintf( output_source, " [%d", ptr->matches );
 				for( int i = 0; i < MAX_CODES; i++ ) {
 					if( ptr->description[ i ]) {
 						look = 1 << ( strlen( ptr->description[ i ])-1 );
-						printf( " " );
+						fprintf( output_source, " " );
 						while( look ) {
 							if( ptr->unmatched[ i ] & look ) {
-								printf( "%c", PLACE_VARIABLE );
+								fprintf( output_source, "%c", PLACE_VARIABLE );
 							}
 							else {
-								printf( "%c", (( look & PLACE_PATTERN )? PLACE_MARK: PLACE_GAP ));
+								fprintf( output_source, "%c", (( look & PLACE_PATTERN )? PLACE_MARK: PLACE_GAP ));
 							}
 							look >>= 1;
 						}
-						printf( "]" );
+						fprintf( output_source, "]" );
 					}
 				}
 			}
-			printf( " %s %s\n",
+			fprintf( output_source, " %s %s\n",
 				ptr->comment,		/* The commentary text associated with this line */
 				output_comment_b );
 		}
@@ -1063,15 +1150,24 @@ static int emit_decoder( NODE *node, int left ) {
 			 *	Not a decoded instruction, an illegal one.
 			 */
 			if( maximum_words > 1 ) {
-				printf( "\t{ 0, " );
+				fprintf( output_source, "\t{ 0, " );
 			}
 			else {
-				printf( "\t{ " );
+				fprintf( output_source, "\t{ " );
 			}
-			printf( "0,0,\t%s%s%s }%c\t%s %3d Invalid Instruction %s\n",
-				output_format_a,
-				error_handler,		/* Leaf node function name */
-				output_format_b,
+			fprintf( output_source, "0, 0" );
+			if( output_formats ) {
+				for( int i = 0; i < output_formats; i++ ) {
+					fprintf( output_source, ", %s%s%s",
+						output_format_a[ i ],
+						error_handler,		/* Leaf node function name */
+						output_format_b[ i ]);
+				}
+			}
+			else {
+				fprintf( output_source, ", %s", error_handler );
+			}
+			fprintf( output_source, " }%c\t%s %3d Invalid Instruction %s\n",
 				sep,
 				output_comment_a,
 				node->index,		/* The index number of this node */
@@ -1087,32 +1183,39 @@ static int emit_decoder( NODE *node, int left ) {
 			dropped++;
 		}
 		if( maximum_words > 1 ) {
-			printf( "\t{ %d, ", node->op_word );
+			fprintf( output_source, "\t{ %d, ", node->op_word );
 		}
 		else {
-			printf( "\t{ " );
+			fprintf( output_source, "\t{ " );
 		}
 		switch( word_size ) {
 			case 8: {
-				fmt = "0x%02X,%d,\tNULL }%c\t%s %3d %s\n";
+				fmt = "0x%02X, %d";
 				break;
 			}
 			case 16: {
-				fmt = "0x%04X,%d,\tNULL }%c\t%s %3d %s\n";
+				fmt = "0x%04X, %d";
 				break;
 			}
 			case 32: {
-				fmt = "0x%08X,%d,\tNULL }%c\t%s %3d %s\n";
+				fmt = "0x%08X, %d";
 				break;
 			}
 			default: {
-				fmt = "0x%X,%d,\tNULL }%c\t%s %3d %s\n";
+				fmt = "0x%X, %d";
 				break;
 			}
 		}
-		printf( fmt,
+		fprintf( output_source, fmt,
 			(((word)1) << node->op_bit ),
-			node->one->index - node->index,	/* Relative distance down array */
+			node->one->index - node->index );	/* Relative distance down array */
+		if( output_formats ) {
+			for( int i = 0; i < output_formats; i++ ) fprintf( output_source, ", NULL" );
+		}
+		else {
+			fprintf( output_source, ", NULL" );
+		}
+		fprintf( output_source, " }%c\t%s %3d %s\n",
 			sep,
 			output_comment_a,
 			node->index,			/* The index number of this node */
@@ -1135,20 +1238,47 @@ int main( int argc, char *argv[]) {
 	word	mask[ MAX_CODES ];
 	int	table_size;
 
-	if( argc != 2 ) {
-		fprintf( stderr, "Usage: %s {filename} (or - for stdin)\n", argv[ 0 ]);
-		return( 1 );
-	}
-
-	if( strcmp( argv[ 1 ], "-" ) == 0 ) {
-		input = stdin;
-	}
-	else {
-		if(( input = fopen( argv[ 1 ], "r" )) == NULL ) {
-			fprintf( stderr, "Unable to open file '%s'\n", argv[ 1 ]);
+	switch( argc ) {
+		case 1: {
+			/*
+			 *	Reading from STDIN
+			 */
+			input = stdin;
+			output_base_name = NULL;
+			break;
+		}
+		case 2: {
+			char	*p;
+			
+			/*
+			 *	File name supplied
+			 */
+			if(( input = fopen( argv[ 1 ], "r" )) == NULL ) {
+				fprintf( stderr, "Unable to open file '%s'\n", argv[ 1 ]);
+				return( 1 );
+			}
+			/*
+			 *	Set up for finding out if we are C or C++
+			 */
+			if(( p = strchr(( output_base_name = strdup( argv[ 1 ])), PERIOD ))) {
+				/*
+				 *	Blast the dot away as there is one.
+				 */
+				*p = EOS;
+			}
+			break;
+		}
+		default: {
+			fprintf( stderr, "Usage: %s [{filename}]\n", argv[ 0 ]);
 			return( 1 );
 		}
 	}
+	output_source = stdout;
+	output_header = stdout;
+
+	/*
+	 *	Here we go...
+	 */
 	line = 0;
 	while( fgets( buffer, MAX_BUFFER, input )) {
 		line += 1;
@@ -1206,8 +1336,6 @@ int main( int argc, char *argv[]) {
 	/*
 	 *	Fill in missing output information if not supplied.
 	 */
-	if( output_format_a == NULL ) output_format_a = "";
-	if( output_format_b == NULL ) output_format_b = "";
 	if( output_comment_a == NULL ) output_comment_a = "/*";
 	if( output_comment_b == NULL ) output_comment_b = "*/";
 	if( data_type == NULL ) data_type = "decoder_t";
@@ -1238,58 +1366,63 @@ int main( int argc, char *argv[]) {
 		/*
 		 *	C style start to end comments
 		 */
-		printf( "%s\n", output_comment_a );
-		printf( "\tStart Of Table\n" );
-		printf( "\t==============\n" );
-		printf( "%s\n", output_comment_b );
+		fprintf( output_source, "%s\n", output_comment_a );
+		fprintf( output_source, "\tStart Of Table\n" );
+		fprintf( output_source, "\t==============\n" );
+		fprintf( output_source, "%s\n", output_comment_b );
 	}
 	else {
 		/*
 		 *	C++ style start to end comments
 		 */
-		printf( "%s\n", output_comment_a );
-		printf( "%s\tStart Of Table\n", output_comment_a );
-		printf( "%s\t==============\n", output_comment_a );
-		printf( "%s\n", output_comment_a );
+		fprintf( output_source, "%s\n", output_comment_a );
+		fprintf( output_source, "%s\tStart Of Table\n", output_comment_a );
+		fprintf( output_source, "%s\t==============\n", output_comment_a );
+		fprintf( output_source, "%s\n", output_comment_a );
 	}
-	printf( "%s %s %s[ %d ] = {\n", data_scope, data_type, data_name, table_size );
+	fprintf( output_source, "%s %s %s[ %d ] = {\n", data_scope, data_type, data_name, table_size );
 	(void)emit_decoder( tree, table_size );
-	printf( "};\n" );
-	printf( "\n" );
+	fprintf( output_source, "};\n" );
+	fprintf( output_source, "\n" );
 	if( strlen( output_comment_b )) {
 		/*
 		 *	C style start to end comments
 		 */
-		printf( "%s\n", output_comment_a );
-		printf( "\tEnd Of Table\n" );
-		printf( "\t============\n" );
-		printf( "%s\n", output_comment_b );
+		fprintf( output_source, "%s\n", output_comment_a );
+		fprintf( output_source, "\tEnd Of Table\n" );
+		fprintf( output_source, "\t============\n" );
+		fprintf( output_source, "%s\n", output_comment_b );
 	}
 	else {
 		/*
 		 *	C++ style start to end comments
 		 */
-		printf( "%s\n", output_comment_a );
-		printf( "%s\tEnd Of Table\n", output_comment_a );
-		printf( "%s\t============\n", output_comment_a );
-		printf( "%s\n", output_comment_a );
+		fprintf( output_source, "%s\n", output_comment_a );
+		fprintf( output_source, "%s\tEnd Of Table\n", output_comment_a );
+		fprintf( output_source, "%s\t============\n", output_comment_a );
+		fprintf( output_source, "%s\n", output_comment_a );
 	}
 
 	/*
 	 * 	Output all of the finish data..
 	 */
 	while( finish_data ) {
-		printf( "%s\n", finish_data->data );
+		fprintf( output_source, "%s\n", finish_data->data );
 		finish_data = finish_data->next;
 	}
 
 	/*
 	 *	Output a status line.
 	 */
-	if( dropped) {
-		printf( "\nERROR!\n\n\t%d errors detected in configuration data.\n\n", dropped );
+	if( dropped ) {
+		fprintf( stderr, "\nERROR!\n\n\t%d errors detected in configuration data.\n\n", dropped );
 	}
 
+	if( output_base_name ) {
+		fclose( output_header );
+		fclose( output_source );
+	}
+	
 	/*
 	 *	Done
 	 */
