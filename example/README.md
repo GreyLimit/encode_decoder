@@ -4,8 +4,8 @@ These file have not been used in anger yet, but show the intended purpose of thi
 
 usage:
 ```
-encode_decoder AVR_Instructions.txt > AVR_Decoder.cpp
+encode_decoder AVR_Decoder.txt
 ```
-The AVR_Decode.h file needs to be hand crafted to suit.
+This will generate the files 'AVR_Decode.h' and 'AVR_Decoder.cpp'.
 
 From this example provided it can be seen that I still have work to do in completing the instruction definitions.
