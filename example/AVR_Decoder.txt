@@ -333,45 +333,11 @@ state record.
 {H				\}
 {H			\}
 {H		\}
-{H		void set_pc( word h, word l ) {
-{H			switch( _pas_bytes ) {
-{H				case 1: {
-{H					_pc = low( l ) & _pc_mask;
-{H					break;
-{H				\}
-{H				case 2: {
-{H					_pc = l & _pc_mask;
-{H					break;
-{H				\}
-{H				case 3: {
-{H					_pc = ( (dword)h << 16 ) | l;
-{H					_pc &= _pc_mask;
-{H					break;
-{H				\}
-{H				default: {
-{H					error->raise( Invalid_PAS );
-{H				\}
-{H			\}
+{H		void set_pc( dword adrs ) {
+{H			_pc = adrs & _pc_mask;
 {H		\}
-{H		void inc_pc( word h, word l ) {
-{H			switch( _pas_bytes ) {
-{H				case 1: {
-{H					_pc = ( _pc + low( l )) & _pc_mask;
-{H					break;
-{H				\}
-{H				case 2: {
-{H					_pc = ( _pc + l ) & _pc_mask;
-{H					break;
-{H				\}
-{H				case 3: {
-{H					_pc += ( (dword)h << 16 ) | l;
-{H					_pc &= _pc_mask;
-{H					break;
-{H				\}
-{H				default: {
-{H					error->raise( Invalid_PAS );
-{H				\}
-{H			\}
+{H		void inc_pc( dword rel ) {
+{H			_pc = ( _pc + rel ) & _pc_mask;
 {H		\}
 {H			
 {H		//
@@ -650,8 +616,9 @@ to simplify the definition of the individual instructions actions.
 { //	Sign extension routine.
 { //
 { template<class t, word n> inline t sign_extend( t value ) {
-{ 	const t sign_mask = ~(((t)1)<<(n-1));
-{ 	if( value & sign_mask ) value |= sign_mask;
+{ 	const t sign_bit = ((t)1)<<(n-1);
+{	const t sign_fill = ~((sign_bit<<1)-1);
+{ 	if( value & sign_bit ) value |= sign_fill;
 { 	return( value );
 { \}
 { 
@@ -789,7 +756,9 @@ Opcode argument bits:
 { //	Also provide flag index back to letter routine.
 { //
 { static inline word arg_bit( word op ) { return( op & 0x0007 ); \}
+{ static inline word arg_bit_mask( word op ) { return((word)1 << ( op & 0x0007 )); \}
 { static inline word arg_flag( word op ) { return(( op >> 4 ) & 0x0007 ); \}
+{ static inline word arg_flag_mask( word op ) { return((word)1 << (( op >> 4 ) & 0x0007 )); \}
 { static inline char disp_flag( word flag ) {
 { 	static const char flags[ 8 ] = { 'C', 'Z', 'N', 'V', 'S', 'H', 'T', 'I' \};
 {	if( word > 7 ) return( '?' );
@@ -823,15 +792,14 @@ Opcode argument bits:
 { //		____ __jj jjjj j___	7
 { //		____ jjjj jjjj jjjj	12
 { //
-{ //	Absolute function only returns upper 6 bits.
-{ //
-{ static dword arg_absolute( word op ) { return(( op & 0x0001 ) | (( op >> 3 ) & 0x003E )); \}
+{ static dword arg_absolute( word op, word arg ) { return( COMBINEW((( op & 0x0001 ) | (( op >> 3 ) & 0x003E )), arg )); \}
 { static dword arg_branch( word op ) { return( sign_extend<dword,7>(( op >> 3 ) & 0x7F )); \}
-{ static word arg_relative( word op ) { return( sign_extend<dword,12>( op & 0x0FFF ); \}
+{ static dword arg_relative( word op ) { return( sign_extend<dword,12>( op & 0x0FFF ); \}
 {
 { //	kkkkkk kkkkkkkkkkkkkkkk = 22 bit absolute program address
 { //
 { static dword arg_int22( word op, word arg ) {
+{	WRITE CODE HERE
 { \}
 
 Define the specific details that the decoder encoder needs to know:
@@ -902,7 +870,7 @@ Define the 'illegal' instruction implementation.  Here is as good as anywhere.
 	{ 	return( 1 );
 	{ \}
 
-{ static instruction inst_adc = { op_illegal, dis_illegal \};
+{ static instruction inst_illegal = { op_illegal, dis_illegal \};
 
 The remainder of this document captures each of the instructions, in alphabetical
 order.  The interpretation of the instructions encoding and actions is taken from
@@ -1143,13 +1111,13 @@ Note:
 { //
 { //	BCLR s		SREG[s] = 0		(0 <= d <= 31, 0 <= b <= 7)
 { //
-{I 100101001sss1000			}
+{I 100101001sss1000 bclr			}
 
 	{ static word op_bclr( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	1001 0100 1sss 1000
 	{ 	//
-	{ 	*(state->_sr) &= ~( 1 << arg_flag( opcode ));
+	{ 	*(state->_sr) &= ~arg_flag_mask( opcode ));
 	{ 	return( 1 );
 	{ \}
 
@@ -1177,10 +1145,10 @@ Note:
 	{ 	
 	{ 	dv = state->_regs->read( dr = arg_d0_d31( opcode ));
 	{ 	if( state->get_T()) {
-	{ 		dv |= 1 << arg_bit( opcode );
+	{ 		dv |= arg_bit_mask( opcode );
 	{ 	\}
 	{ 	else {
-	{ 		dv &= ~( 1 << arg_bit( opcode ));
+	{ 		dv &= ~arg_bit_mask( opcode );
 	{ 	\}
 	{ 	state->_regs->write( dr, dv );
 	{ 	return( 1 );
@@ -1205,41 +1173,47 @@ Note:
 	{ 	//
 	{ 	//	1111 01jj jjjj jbbb
 	{ 	//
-	{ 	if(( *(state->_sr) & ( 1 << arg_bit( opcode ))) == 0 ) {
-	{ 		state->_pc += arg_branch( opcode );
+	{ 	if(( *(state->_sr) & arg_bit_mask( opcode )) == 0 ) {
+	{ 		state->inc_pc( arg_branch( opcode ));
 	{ 		return( 2 );
 	{ 	\}
 	{ 	return( 1 );
 	{ \}
 
 	{ static word dis_brbc( word opcode, AVR_State *state, char *buffer, int max ) {
-	{	int j = arg_branch( opcode );
 	{	int f = arg_bit( opcode );
-	{	if( SIGNW( j )) HERE JEFF
-	{ 	snprintf( buffer, max, "brbc %d(%c),%d", f, disp_flag( f ), j );
+	{ 	snprintf( buffer, max, "brbc %d(%c),%d", f, disp_flag( f ), (int)arg_branch( opcode ));
 	{ 	return( 1 );
 	{ \}
-	{ 	snprintf( buffer, max, "bclr );
 
 { static instruction inst_brbc = { op_brbc, dis_brbc \};
 
 
 5.10 BRBS – Branch if Bit in SREG is Set
 ========================================
-
-	BRBS s,k		If SREG(s) == 1 then PC ← PC + k + 1, else PC ← PC + 1
-
+{ //
+{ //	BRBS s,k		If SREG(s) == 1 then PC ← PC + k + 1, else PC ← PC + 1
+{ //
 {I 111100jjjjjjjbbb brbs		}
+
 	{ static word op_brbs( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	1111 01jj jjjj jbbb
 	{ 	//
-	{ 	if(( *(state->_sr) & ( 1 << arg_bit( opcode ))) != 0 ) {
-	{ 		state->_pc += arg_branch( opcode );
+	{ 	if(( *(state->_sr) & arg_bit_mask( opcode )) != 0 ) {
+	{ 		state->inc_pc( arg_branch( opcode ));
 	{ 		return( 2 );
 	{ 	\}
 	{ 	return( 1 );
 	{ \}
+
+	{ static word dis_brbs( word opcode, AVR_State *state, char *buffer, int max ) {
+	{	int f = arg_bit( opcode );
+	{ 	snprintf( buffer, max, "brbs %d(%c),%d", f, disp_flag( f ), (int)arg_branch( opcode ));
+	{ 	return( 1 );
+	{ \}
+
+{ static instruction inst_brbs = { op_brbs, dis_brbs \};
 
 
 5.11 BRCC – Branch if Carry Cleared
@@ -1256,10 +1230,11 @@ Note:
 
 5.13 BREAK – Break
 ==================
+{ //
+{ //	BREAK						(Stop CPU, enter debug mode)
+{ //	
+{I 1001010110011000 break		}
 
-	BREAK						(Stop CPU, enter debug mode)
-	
-{I 1001010110011000 break		} 
 	{ static word op_break( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	1001 0101 1001 1000
@@ -1271,6 +1246,13 @@ Note:
 	{ 	if(( clocks = ticks[ state->_cpu ]) == 0 ) state->_error->raise( Unsupported_Instruction, state->_pc, opcode );
 	{ 	return( clocks );
 	{ \}
+
+	{ static word dis_break( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ 	snprintf( buffer, max, "break" );
+	{ 	return( 1 );
+	{ \}
+
+{ static instruction inst_break = { op_break, dis_break \};
 
 
 5.14 BREQ – Branch if Equal
@@ -1371,42 +1353,58 @@ Note:
 
 5.30 BSET – Bit Set in SREG
 ===========================
-
-	BSET s			SREG[s] = 1
-
+{ //
+{ //	BSET s			SREG[s] = 1
+{ //
 {I 100101000sss1000 bset		}
+
 	{ static word op_bset( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	1001 0100 0sss 1000
 	{ 	//
-	{ 	*(state->_sr) |= 1 << arg_flag( opcode );
+	{ 	*(state->_sr) |= arg_flag_mask( opcode );
 	{ 	return( 1 );
 	{ \}
 
+	{ static word dis_bset( word opcode, AVR_State *state, char *buffer, int max ) {
+	{	int f = arg_flag( opcode );
+	{ 	snprintf( buffer, max, "bset %d(%c)", f, disp_flag( f ));
+	{ 	return( 1 );
+	{ \}
+
+{ static instruction inst_bset = { op_bset, dis_bset \};
 
 
 5.31 BST – Bit Store from Bit in Register to T Bit in SREG
 ==========================================================
+{ //
+{ //	BST Rd,b		T = Rd[b]
+{ //
+{I 1111101ddddd0bbb bst			}
 
-	BST Rd,b		T = Rd[b]
-
-{I 1111101ddddd0bbb bst			} 
 	{ static word op_bst( word opcode, AVR_State *state ) {
-	{ word op_bst( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	1111 101d dddd 0bbb
 	{ 	//
-	{ 	state->set_T(( state->_regs->read( arg_d0_d31( opcode )) & ( 1 << arg_bit( opcode ))) != 0 );
+	{ 	state->set_T(( state->_regs->read( arg_d0_d31( opcode )) & arg_bit_mask( opcode )) != 0 );
 	{ 	return( 1 );
 	{ \}
+
+	{ static word dis_bst( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ 	snprintf( buffer, max, "bst r%d,%d", arg_d0_d31( opcode ), arg_bit( opcode ));
+	{ 	return( 1 );
+	{ \}
+
+{ static instruction inst_bst = { op_bst, dis_bst \};
 
 
 5.32 CALL – Long Call to a Subroutine
 =====================================
-
-	CALL j		DS(STACK-) = PC, PC = j
-
+{ //
+{ //	CALL j		DS(STACK-) = PC, PC = j
+{ //
 {I 1001010jjjjj111j jjjjjjjjjjjjjjjj call }
+
 	{ static word op_call( word opcode, AVR_State *state ) {
 	{	//
 	{	//	1001 010j jjjj 111j
@@ -1735,97 +1733,33 @@ Note:
 	{ \}
 
 
-Note:
-	The "BCLR" instruction is a mnemonic version of the eight "CL?"
-	instructions, and is therefore does not require encoding individually.
+Note:	The "BCLR" instruction is a core version of the eight "CL?" instructions,
+	and therefore these do not require encoding individually.
 
 	"100101001sss1000 BCLR s" where sss is the SREG bit number to clear.
 
-{I 1001010010001000 clc			} CLC			C = 0
-	{ static word op_clc( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
+		1001010010001000 clc
+		1001010010011000 clz
+		1001010010101000 cln
+		1001010010111000 clv
+		1001010011001000 cls
+		1001010011011000 clh
+		1001010011101000 clt
+		1001010011111000 cli
 
-{I 1001010010011000 clz			} CLZ			Z = 0
-	{ static word op_clz( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
-
-{I 1001010010101000 cln			} CLN			N = 0
-	{ static word op_cln( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
-
-{I 1001010010111000 clv			} CLV			V = 0
-	{ static word op_clv( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
-
-{I 1001010011001000 cls			} CLS			S = 0
-	{ static word op_cls( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
-
-{I 1001010011011000 clh			} CLH			H = 0
-	{ static word op_clh( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
-
-{I 1001010011101000 clt			} CLT			T = 0
-	{ static word op_clt( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
-
-{I 1001010011111000 cli			} CLI			I = 0
-	{ static word op_cli( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
-
-Note:
-	The "BSET" instruction is a mnemonic version of the eight "SE?"
-	instructions, and is therefore does not require encoding individually.
+Note:	The "BSET" instruction is a core version of the eight "SE?" instructions,
+	and therefore these do not require encoding individually.
 
 	"100101000sss1000 BCLR s" where sss is the SREG bit number to set.
 
-{I 1001010000001000 sec			} SEC			C = 1
-	{ static word op_sec( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
-
-{I 1001010000011000 sez			} SEZ			Z = 1
-	{ static word op_sez( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
-
-{I 1001010000101000 sen			} SEN			N = 1
-	{ static word op_sen( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
-
-{I 1001010000111000 sev			} SEV			V = 1
-	{ static word op_sev( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
-
-{I 1001010001001000 ses			} SES			S = 1
-	{ static word op_ses( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
-
-{I 1001010001011000 seh			} SEH			H = 1
-	{ static word op_seh( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
-
-{I 1001010001101000 set			} SET			T = 1
-	{ static word op_set( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
-
-{I 1001010001111000 sei			} SEI			I = 1
-	{ static word op_sei( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
+		1001010000001000 sec
+		1001010000011000 sez
+		1001010000101000 sen
+		1001010000111000 sev
+		1001010001001000 ses
+		1001010001011000 seh
+		1001010001101000 set
+		1001010001111000 sei
 
 {I 10010100kkkk1011 des			} DES k			Data Encryption Action 'k'
 	{ static word op_des( word opcode, AVR_State *state ) {
