@@ -1,9 +1,9 @@
 # encode_decoder
-A rough-n-ready program to generate a table to enable software to decode CPU instructions.  It would seem that the more I try to use this inn a real situation the more 'tweaking' needs applying
+A rough-n-ready program to generate a table to enable software to decode CPU instructions.  It would seem that the more I try to use this in a real situation the more 'tweaking' needs applying
 
-I'm not putting a great deal of effort into publishing this as I wrote it to support me in writinng another program.  But here goes:-
+I'm not putting a great deal of effort into publishing this as I wrote it to support me in writing another program.  But here goes:-
 
-This program was throwwn together to facilitate generating a 'decision' table that would enable, with minimal(ish) space overhead, software to decode a CPU binary opcode back to a known instruction.  This being a core part of any CPU/MCU simulation.
+This program was thrown together to facilitate generating a 'decision' table that would enable, with minimal(ish) space overhead, software to decode a CPU binary opcode back to a known instruction.  This being a core part of any CPU/MCU simulation.
 
 For example when supplied the following input data:
 ```
@@ -42,7 +42,7 @@ The first character after the open brace indicates the content of the record, an
 
 `{F f}` tells the program how to decorate/format the name when outputting it.
 
-`{I c c c ... n}` provides a binary description of a single instruction where 'c' (repeated as required) is the binary description of the opcode, each element with a number of bits as specified by the S record.  Where bits are arguments to the opcode then letters or periods MUST be used instead of '0' or '1'.
+`{I c c c ... n}` provides a binary description of a single instruction where 'c' (repeated as required) is the binary description of the opcode, each element with a number of bits as specified by the Z record.  Where bits are arguments to the opcode then letters or periods MUST be used instead of '0' or '1'.
 
 So what does it output?  It outputs a binary decision tree enabling a reasonably efficient lookup of the actual instruction.  The fields in each record represent the index number of the opcode element to be checked, the bit mask giving the bit to be checked in that word, the number of records to 'move down' if the bit tested is 1, and finally an instruction name.  If the bit tested was 0 then simply move to the next record.  A leaf node (ie a successful instruction decode) is indicated by the bit mask being zero.
 
@@ -60,7 +60,7 @@ instruction *find( decoder_t *table, word *opcode ) {
 ```
 Some final comments:
 
-* The table output will come to a leaf node before all bits have been checked, if it needs to check no more bits.  This means that it is possible to miss-identify an instruction if the input data is not complete.
+* The table output will come to a leaf node before all bits have been checked if it needs to check no more bits.  This means that it is possible to miss-identify an instruction if the input data is not complete.
 * The program will try to confirm consistency of the input data, and will output errors (to stderr) as it detects them, and sets the exit code of the program to a non-zero value after producing the table.
 * The table output contains additional code comments providing details about the table.  These are mostly the index number of the table row, the line number where the source for a leaf node was found and (in `[]`) how many opcodes resolved to this instruction.
 * The emphasis is essentially to get the input table complete and correct.
@@ -93,7 +93,7 @@ The following is taken for the source code as a more complete description of the
  *	I	Provide details of an instruction definition.  This is
  *		a series of binary numbers, each of S bits long separated
  *		by white space.  The final word, not a binary number and
- *		not needing to be S bits long, is the name of the instruction.
+ *		not needing to be Z bits long, is the name of the instruction.
  *		This is not case sensitive, and is effectively passed through
  *		to the output without interpretation.
  *
