@@ -1,5 +1,6 @@
 //
 //	AVR_Decoder.h
+//	-------------
 //
 
 #ifndef _AVR_DECODER_H_
@@ -16,7 +17,12 @@
 //	pointers to functions we are storing
 //	and returning.
 //
-typedef void (*function_code)( word opcode, AVR_State *state );
+//	The function itself takes the opcode
+//	identified, a pointer to the AVR state
+//	and returns the number of cycles that
+//	the instruction takes.
+//
+typedef word (*function_code)( word opcode, AVR_State *state );
 
 //
 //	Declare the look up functions (whose code
