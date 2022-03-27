@@ -1,3 +1,30 @@
+
+
+	#####
+	#     #     #    #    #  #    #  #         ##     #####  ######
+	#           #    ##  ##  #    #  #        #  #      #    #
+	 #####      #    # ## #  #    #  #       #    #     #    #####
+	      #     #    #    #  #    #  #       ######     #    #
+	#     #     #    #    #  #    #  #       #    #     #    #
+	 #####      #    #    #   ####   ######  #    #     #    ######
+
+			   #    #     # ######
+			  # #   #     # #     #
+			 #   #  #     # #     #
+			#     # #     # ######
+			#######  #   #  #   #
+			#     #   # #   #    #
+			#     #    #    #     #
+
+An implementation of an AVR Microcontroller CPU, encoded using the
+'encode_decoder' pre-processor for which source code be located at
+"https://github.com/GreyLimit/encode_decoder"
+
+
+Set output language to C++ for the encode_decoder processor.  This needs
+to precede any other processor records to ensure consistent output.
+{L C++}
+
 AVR Instruction Encoding
 ========================
 
@@ -12,44 +39,562 @@ In explanation:
 
 	The Wiki page supplied an initial consolidated view of instructions
 	encoding, and potentially offered a mechanism to allow analysis of
-	the encoding system.
+	the encoding system (which led to the development of the encode_decoder
+	pre-processor program).
 	
 	The Microchip Atmel documents, being the final authority on the subject,
-	provided the means to verify the content of the resulting data (subject
-	to the acknowledgment that I have done this without external confirmation).
+	provided the specific information on the instructions and their operation.
 
-The table presented below forms the list which provides the foundation for the
-decoding of AVR instructions within the simulator.
+	While the source of the technical details is authoritative, the accuracy
+	of this implementation has to be subject to the acknowledgment that I have
+	done this without any external confirmation process (so far).
 
-Bit assignments: 
 
-rrrrr	= Source register
-rrrr	= Source register (R16–R31)
-rrr	= Source register (R16–R23)
-RRRR	= Source register pair (R1:R0–R31:R30)
-ddddd	= Destination register
-dddd	= Destination register (R16–R31)
-ddd	= Destination register (R16–R23)
-DDDD	= Destination register pair (R1:R0–R31:R30)
-dd	= Register pair W, X, Y or Z (R25:R24, R27:R26, R29:R28, R31:R30)
-aaaaaa	= I/O space address
-aaaaa	= I/O space address (first 32 only)
-bbb	= Bit number (0–7)
-kkkk	= 4-bit unsigned constant (DES opcode)
-kkkkkk	= 6-bit unsigned constant
-kkkkkkk	= 7-bit signed constant (relative jumps)
-KKKKKKKK= 8-bit constant
+The Decode Definitions File
+===========================
 
-AVR Instruction Table
-=====================
+Set out in the header file the interface to the
+decoder.  This is the definition of the AVR CPU
+state record.
+
+{H//
+{H//	AVR_Decoder.h
+{H//	-------------
+{H//
+{H
+{H#ifndef _AVR_DECODER_H_
+{H#define _AVR_DECODER_H_
+{H
+{H//
+{H//	Include the other definitions we need.
+{H//
+{H#include "Base.h"
+{H#include "Memory.h"
+{H#include "Flash.h"
+{H#include "Interrupts.h"
+{H#include "Clock.h"
+{H
+{H//
+{H//	Also need to be able to raise software exceptions
+{H//
+{H#include "Exception.h"
+{H
+{H//
+{H//	Enumerate the various AVR CPUs we shall (try)
+{H//	to simulate.
+{H//
+{Htypedef enum {
+{H	//
+{H	//	Define the different AVR architectures
+{H	//			
+{H	AVR_CPU		= 0,	// "AVR"	Original instruction set from 1995.
+{H	
+{H	AVRe_CPU	= 1,	// "megaAVR"	Multiply (xMULxx), Move Word (MOVW),
+{H				//		and enhanced Load Program Memory (LPM)
+{H				//		added to the AVR instruction set.
+{H				
+{H	AVRet_CPU	= 2,	// "tinyAVR"	Multiply not included, but else equal
+{H				//		to AVRe for megaAVR ("et" is my label
+{H				//		to apply to this option).
+{H				
+{H	AVRxm_CPU	= 3,	// "XMEGA"	The Read Modify Write (RMW) and
+{H				//		DES encryption instructions are
+{H				//		unique to this version.
+{H				
+{H	AVRxt_CPU	= 4,	// "AVR"	Base AVR from 2016 and onwards.
+{H	
+{H	AVRrc_CPU	= 5	// "tinyAVR"	The Reduced Core AVR CPU.
+{H\} AVR_Type;
+{H
+{H//
+{H//	Define the number of types we will support (as above).
+{H//
+{Hconst byte AVR_Types = 6;
+{H
+{H//
+{H//	The AVR CPU State
+{H//
+{Hclass AVR_State {
+{H	public:
+{H		//
+{H		//	Exception handler.
+{H		//
+{H		Exception	*_error;
+{H
+{H		//
+{H		//	Which CPU are we?
+{H		//
+{H		AVR_Type	_cpu;
+{H
+{H		//
+{H		//	Program address size in BITS and the number of bytes
+{H		//	required to hold that many bits.
+{H		//
+{H		byte		_pas,
+{H				_pas_bytes;
+{H		
+{H		//
+{H		//	Where do we find the program to execute?
+{H		//
+{H		Flash		*_program;
+{H
+{H		//
+{H		//	The various element of memory:
+{H		//
+{H		Memory		*_data,
+{H				*_regs,
+{H				*_io,
+{H				*_ext_io,
+{H				*_sram;
+{H
+{H		//
+{H		//	Where we collect and manage IRQs.
+{H		//
+{H		Interrupts	*_irqs;
+{H
+{H		//
+{H		//	Where the CPU clock is simulated.
+{H		//
+{H		Clock		*_clock;
+{H
+{H		//
+{H		//	The Status Register.
+{H		//	====================
+{H		//
+{H		//	Define the IO port where the status register
+{H		//	is found.
+{H		//
+{H		static const word status_register = 0x3F;
+{H		//
+{H		//	Status register (pointer to its location).
+{H		//
+{H		byte		*_sr;
+{H		//
+{H		//	The following definitions assist with accessing
+{H		//	the status register in a (slightly) simplified
+{H		//	fashion
+{H		//
+{H		//	I: Global Interrupt Enable
+{H		//	--------------------------
+{H		//
+{H		inline bool get_I( void ) { return( *_sr & 0x80 ); \}
+{H		inline void set_I( bool v ) { *_sr = ( *_sr & ~0x80 )|( v? 0x80: 0x00 ); \}
+{H		//
+{H		//	T: Bit Copy Storage
+{H		//	-------------------
+{H		//
+{H		inline bool get_T( void ) { return( *_sr & 0x40 ); \}
+{H		inline void set_T( bool v ) { *_sr = ( *_sr & ~0x40 )|( v? 0x40: 0x00 ); \}
+{H		//
+{H		//	H: Half Carry Flag
+{H		//	------------------
+{H		//
+{H		inline bool get_H( void ) { return( *_sr & 0x20 ); \}
+{H		inline void set_H( bool v ) { *_sr = ( *_sr & ~0x20 )|( v? 0x20: 0x00 ); \}
+{H		//
+{H		//	S: Sign Bit
+{H		//	-----------
+{H		//
+{H		inline bool get_S( void ) { return( *_sr & 0x10 ); \}
+{H		inline void set_S( bool v ) { *_sr = ( *_sr & ~0x10 )|( v? 0x10: 0x00 ); \}
+{H		//
+{H		//	V: Two’s Complement Overflow Flag
+{H		//	---------------------------------
+{H		//
+{H		inline bool get_V( void ) { return( *_sr & 0x08 ); \}
+{H		inline void set_V( bool v ) { *_sr = ( *_sr & ~0x08 )|( v? 0x08: 0x00 ); \}
+{H		//
+{H		//	N: Negative Flag
+{H		//	----------------
+{H		//
+{H		inline bool get_N( void ) { return( *_sr & 0x04 ); \}
+{H		inline void set_N( bool v ) { *_sr = ( *_sr & ~0x04 )|( v? 0x04: 0x00 ); \}
+{H		//
+{H		//	Z: Zero Flag
+{H		//	------------
+{H		//
+{H		inline bool get_Z( void ) { return( *_sr & 0x02 ); \}
+{H		inline void set_Z( bool v ) { *_sr = ( *_sr & ~0x02 )|( v? 0x02: 0x00 ); \}
+{H		//
+{H		//	C: Carry Flag
+{H		//	-------------
+{H		//
+{H		inline bool get_C( void ) { return( *_sr & 0x01 ); \}
+{H		inline void set_C( bool v ) { *_sr = ( *_sr & ~0x01 )|( v? 0x01: 0x00 ); \}
+{H
+{H		//
+{H		//	The Stack Pointer (effectively 16 bit).
+{H		//	=======================================
+{H		//
+{H		//	Define the IO ports where the stack pointer
+{H		//	is found.
+{H		//
+{H		static const word stack_pointer_h = 0x3E;
+{H		static const word stack_pointer_l = 0x3D;
+{H		//
+{H		//	Stack Pointer, pointers to locations.
+{H		//
+{H		byte		*_sp_h,
+{H				*_sp_l;
+{H		//
+{H		//	Some simplified Stack Pointer routines including functions
+{H		//	to make and split 16 bit values.
+{H		//
+{H		static inline byte high( word v ) { return(( v >> 8 ) & 0xFF ); \}
+{H		static inline byte low( word v ) { return( v & 0xFF ); \}
+{H		static inline word combine( byte h, byte l ) { return( ((word)h << 8 ) | ((word)l )); \}
+{H		//
+{H		//	Simplified access to the stack pointer.
+{H		//
+{H		inline word get_SP( void ) { return( combine( *_sp_h, *_sp_l )); \}
+{H		inline void set_SP( word sp ) { *_sp_l = low( sp ); *_sp_h = high( sp ); \}
+{H
+{H		//
+{H		//	Stacking Routines
+{H		//
+{H		void push_byte( byte v ) {
+{H			word sp = get_SP();
+{H			_data->write( sp--, v );
+{H			set_SP( sp );
+{H		\}
+{H		void push_word( word v ) {
+{H			word sp = get_SP();
+{H			//
+{H			//	Push MSB first to maintain little-endian
+{H			//	data order in memory.
+{H			//
+{H			_data->write( sp--, high( v ));
+{H			_data->write( sp--, low( v ));
+{H			set_SP( sp );
+{H		\}
+{H		byte pop_byte( void ) {
+{H			word sp = get_SP();
+{H			byte v = _data->read( ++sp );
+{H			set_SP( sp );
+{H			return( v );
+{H		\}
+{H		word pop_word( void ) {
+{H			word sp = get_SP();
+{H			//
+{H			//	Pop LSB first as this is the reverse of
+{H			//	the push action.
+{H			//
+{H			byte l = _data->read( ++sp );
+{H			byte h = _data->read( ++sp );
+{H			set_SP( sp );
+{H			return( combine( h, l ));
+{H		\}
+{H		//
+{H		//	Specific PC push and pop routines (as the size of the
+{H		//	program counter varies) and a direct set PC function.
+{H		//
+{H		void push_pc( word h, word l ) {
+{H			if( _pas_bytes ) {
+{H				case 1: {
+{H					push_byte( low( _pc ));
+{H					_pc = low( l ) & _pc_mask;
+{H					break;
+{H				\}
+{H				case 2: {
+{H					push_word( _pc );
+{H					_pc = l & _pc_mask;
+{H					break;
+{H				\}
+{H				case 3: {
+{H					push_byte( low( _pc >> 16 ));
+{H					push_word( _pc );
+{H					_pc = ((dword)h << 16 ) | l;
+{H					_pc &= _pc_mask;
+{H					break;
+{H				\}
+{H				default: {
+{H					error->raise( Invalid_PAS );
+{H				\}
+{H			\}
+{H		\}
+{H		void pop_pc( void ) {
+{H			switch( _pas_bytes ) {
+{H				case 1: {
+{H					_pc = pop_byte() & _pc_mask;
+{H					break;
+{H				\}
+{H				case 2: {
+{H					_pc = pop_word() & _pc_mask;
+{H					break;
+{H				\}
+{H				case 3: {
+{H					_pc = pop_word();
+{H					_pc |= ((dword)pop_byte()) << 16;
+{H					_pc &= _pc_mask;
+{H					break;
+{H				\}
+{H				default: {
+{H					error->raise( Invalid_PAS );
+{H				\}
+{H			\}
+{H		\}
+{H		void set_pc( word h, word l ) {
+{H			switch( _pas_bytes ) {
+{H				case 1: {
+{H					_pc = low( l ) & _pc_mask;
+{H					break;
+{H				\}
+{H				case 2: {
+{H					_pc = l & _pc_mask;
+{H					break;
+{H				\}
+{H				case 3: {
+{H					_pc = ( (dword)h << 16 ) | l;
+{H					_pc &= _pc_mask;
+{H					break;
+{H				\}
+{H				default: {
+{H					error->raise( Invalid_PAS );
+{H				\}
+{H			\}
+{H		\}
+{H		void inc_pc( word h, word l ) {
+{H			switch( _pas_bytes ) {
+{H				case 1: {
+{H					_pc = ( _pc + low( l )) & _pc_mask;
+{H					break;
+{H				\}
+{H				case 2: {
+{H					_pc = ( _pc + l ) & _pc_mask;
+{H					break;
+{H				\}
+{H				case 3: {
+{H					_pc += ( (dword)h << 16 ) | l;
+{H					_pc &= _pc_mask;
+{H					break;
+{H				\}
+{H				default: {
+{H					error->raise( Invalid_PAS );
+{H				\}
+{H			\}
+{H		\}
+{H			
+{H		//
+{H		//	The Program Counter
+{H		//	===================
+{H		//
+{H		//	This has no presence in the address space (unlike the
+{H		//	stack pointer and status register), so only needs a
+{H		//	simple variable to hold it.
+{H		//
+{H		//	Also define the mask value which is applied to the PC
+{H		//	to control its range (simulating a fixed number of bits).
+{H		//
+{H		dword		_pc,
+{H				_pc_mask;
+{H
+{H		//
+{H		//	Read next program word (move PC forward).
+{H		//
+{H		word next_opcode( void ) {
+{H			word	next;
+{H			//
+{H			//	Simples..
+{H			//
+{H			next = _program->read( _pc );
+{H			_pc = ( _pc + 1 ) & _pc_mask;
+{H			return( next );
+{H		\}
+{H
+{H		//
+{H		//	Peek ahead into the program with an offset from the PC
+{H		//
+{H		word peek_next( word offset ) {
+{H			//
+{H			//	Simples..
+{H			//
+{H			return( _program->read(( _pc + offset ) & _pc_mask ));
+{H		\}
+{H
+{H		//
+{H		//	The AVR class emulates a number of AVR class CPUs, selectable
+{H		//	when the object is initialised.
+{H		//
+{H		AVR_State(	AVR_Type	cpu,
+{H				byte		pas,		// Program Address size 1, 2 or 3 (bytes).
+{H				Flash		*program,
+{H				Memory		*data,
+{H				Memory		*regs,
+{H				Memory		*io,
+{H				Memory		*ext_io,
+{H				Memory		*sram,
+{H				Interrupts	*irqs,
+{H				Clock		*clock,
+{H				Exception	*handler ) {
+{H			//
+{H			//	CPU type, and program address size in bits and bytes.
+{H			//
+{H			_cpu = cpu;
+{H			_pas = pas;
+{H			_pas_bytes = ( _pas + 7 ) >> 3;
+{H			//
+{H			//	Define the mask applied to the PC every
+{H			//	time it is adjusted.
+{H			//
+{H			_pc_mask = ((dword)1 << _pas ) - 1;
+{H			//
+{H			//	Flashed program memory.
+{H			//
+{H			_program = program;
+{H			//
+{H			//	Memory in its various forms.
+{H			//
+{H			_data = data;
+{H			_regs = regs;
+{H			_io = io;
+{H			_ext_io = ext_io;
+{H			_sram = sram;
+{H			//
+{H			//	Interrupt mechanism
+{H			//
+{H			_irqs = irqs;
+{H			//
+{H			//	The CPU clock
+{H			//
+{H			_clock = clock;
+{H			//
+{H			//	Save the error handler.
+{H			//
+{H			_error = handler;
+{H			//
+{H			//	Set up Status Register pointer.
+{H			//
+{H			_sr = _io->at( status_register );
+{H			//
+{H			//	Set up the Stack Pointer pointers.
+{H			//
+{H			_sp_h = _io->at( stack_pointer_h );
+{H			_sp_l = _io->at( stack_pointer_l );
+{H			//
+{H			//	Reset internal registers.
+{H			//
+{H			reset();
+{H		\}
+{H		//
+{H		//	Initialise/Reset the CPU
+{H		//
+{H		void reset( void ) {	
+{H			//
+{H			//	Clear any pending interrupts.
+{H			//
+{H			_irqs->reset();
+{H
+{H			//
+{H			//	Status register cleared; global interrupts
+{H			//	disabled.
+{H			//
+{H			*_sr = 0;
+{H			
+{H			//
+{H			//	Stack pointer set to the last byte of memory.
+{H			//
+{H			set_SP( _data->capacity()-1 );
+{H			
+{H			//
+{H			//	Program Counter set start of flash memory.
+{H			//
+{H			_pc = 0x0000;
+{H		\}
+{H		//
+{H		//	Check for interrupt
+{H		//
+{H		void check_irq( void ) {
+{H			byte	irq;
+{H
+{H			//
+{H			//	Interrupts enabled?
+{H			//
+{H			if( get_I()) {
+{H				//
+{H				//	Look for a pending interrupt..
+{H				//
+{H				if( _irqs->find( &irq )) {
+{H					//
+{H					//	We have an interrupt pending, so we need
+{H					//	to do a couple of things:
+{H					//
+{H					//	1/ Reset the I flag.
+{H					//	2/ Clear the causal interrupt.
+{H					//	3/ Stack the program counter
+{H					//	4/ Set the program counter to the right vector
+{H					//
+{H					set_I( false );
+{H					_irqs->clear( irq );
+{H					push_pc();
+{H					//
+{H					//	Now set the PC to the address of the interrupt 'vector',
+{H					//	though this is (in my opinion not) actually a vector.
+{H					//
+{H					//	At each IRQ target address are two words (before the next
+{H					//	IRQ target address) which is enough space for an absolute
+{H					//	jump or two single word instructions.
+{H					//
+{H					_pc = (word)irq << 1;
+{H				\}
+{H			\}
+{H		\}
+{H\};
+{H
+{H
+{H//
+{H//	Define a type to be used to handle the
+{H//	pointers to functions that implement
+{H//	an instruction.
+{H//
+{H//	The function itself takes the opcode
+{H//	identified, a pointer to the AVR state
+{H//	and returns the number of cycles that
+{H//	the instruction takes.
+{H//
+{Htypedef word (*function_code)( word opcode, AVR_State *state );
+{H
+{H//
+{H//	Define a type to be used to handle the
+{H//	pointers to function which disassemble
+{H//	an instruction.  Returns number of word
+{H//	instruction uses.
+{H//
+{Htypedef word (*disassembler)( word opcode, AVR_State *state, char *buffer, int max );
+{H
+{H//
+{H//	Declare the data structure which the instruction
+{H//	lookup routine returns the address of.
+{H//
+{Htypedef struct {
+{H	function_code		*execute;
+{H	disassembler		*display;
+{H\} instruction;
+{H
+{H
+{H//
+{H//	Declare the look up function as defined at the end of
+{H//	the source file.
+{H//
+{Hextern instruction *find_instruction( word opcode );
+{H
+{H#endif
+{H
+{H//
+{H//	EOF
+{H//
+
+The Decode Implementation File
+==============================
+
+The start of the file:
 
 { //
 { //	AVR_Decoder.cpp
-{ //	===============
+{ //	---------------
 { //
 { //	Containing only the decoder table generated
 { //	by 'encode_decoder' from the data file
-{ //	'AVR_instructions.txt'.
+{ //	'AVR_Decoder.txt'.
 { //
 {
 { //
@@ -62,7 +607,6 @@ AVR Instruction Table
 { //	table to compile.
 { //
 { #include "AVR_Decoder.h"
-{ #include "AVR_Instructions.h"
 {
 { //
 { //	Define the decoder node type.
@@ -70,16 +614,17 @@ AVR Instruction Table
 { typedef struct {
 { 	word		mask,		// Which bit do we test (no word index required).
 { 			jump;		// How many to jump if bit is 1.
-{ 	function_code	code;		// The routine to return when we complete decoding.
-{ 	printer_code	print;		// The routine to fill in an output buffer.
+{ 	instruction	*data;		// The data structure to return address of.
 { \} decoder_entry;
 {
+
+The end of the file:
 
 {_
 {_//
 {_//	The lookup function.
 {_//
-{_function_code decode_opcode( word opcode ) {
+{_instruction *find_instruction( word opcode ) {
 {_	decoder_entry	*ptr;
 {_	word		test;
 {_
@@ -92,57 +637,972 @@ AVR Instruction Table
 {_//	EOF
 {_//
 
+
+AVR Instruction Table
+=====================
+
+
+The following definitions are made available to the implementation file
+to simplify the definition of the individual instructions actions.
+
+{ 
+{ //
+{ //	Sign extension routine.
+{ //
+{ template<class t, word n> inline t sign_extend( t value ) {
+{ 	const t sign_mask = ~(((t)1)<<(n-1));
+{ 	if( value & sign_mask ) value |= sign_mask;
+{ 	return( value );
+{ \}
+{ 
+{ //
+{ //	4 bit oriented.
+{ //
+{ #define NIBBLE(v)	((v)&0x0F)
+{ #define HALF(a,b,c)	((NIBBLE(a)+NIBBLE(b)+(c))>9)
+{ //
+{ //	8 bit oriented
+{ //
+{ #define BYTE(v)	((v)&0xFF)
+{ #define LSBIT(v)	((v)&0x01)
+{ #define MSBIT(v)	((v)&0x80)
+{ #define SIGN(v)	(MSBIT(v)!=0)
+{ //
+{ //	16 bit oriented.
+{ //
+{ #define SIGNW(v)	(((v)&0x8000)!=0)
+{ #define LSBYTE(v)	((v)&0xFF)
+{ #define MSBYTE(v)	(((v)>>8)&0xFF)
+{ #define COMBINE(h,l)	((((word)(h))<<8)|(l))
+{ //
+{ //	32 bit oriented.
+{ //
+{ #define MSWORD(v)	((word)(((v)>>16)&0xFFFF))
+{ #define LSWORD(v)	((word)((v)&0xFFFF))
+{ #define COMBINEW(h,l)	((((dword)(h))<<16)|(l))
+{
+
+The information tabulated below forms the list of arguments which are encoded
+in the opcodes of AVR instructions.
+
+Opcode argument bits: 
+
+	rrrrr	= Source register (R0-R31)
+	ddddd	= Destination register (R0-R31)
+	
+	rrrr	= Source register (R16–R31)
+	dddd	= Destination register (R16–R31)
+	
+	rrr	= Source register (R16–R23)
+	ddd	= Destination register (R16–R23)
+	
+	RRRR	= Source register pair (R1:R0–R31:R30)
+	DDDD	= Destination register pair (R1:R0–R31:R30)
+	
+	dd	= Register pair W, X, Y or Z (R25:R24, R27:R26, R29:R28, R31:R30)
+	
+	aaaaaa	= I/O space address
+	aaaaa	= I/O space address (first 32 only)
+	
+	bbb	= Bit number (0–7)
+	sss	= Flag in SREG (bit number 0-7)
+	
+	kkkk	= 4-bit unsigned constant (DES opcode)
+	kkkkkk	= 6-bit unsigned constant
+	KKKKKKKK= 8-bit constant
+
+	jjjjjjj	= 7-bit signed constant (relative branching)
+{
+{ //
+{ //	Provide a set of routines for breaking down op codes
+{ //	into their component parts.
+{ //
+{ //	Bit assignments: 
+{ //
+{ //	rrrrr	= Source register (R0-R31)
+{ //	ddddd	= Destination register (R0-R31)
+{ //
+{ //		____ __r_ ____ rrrr
+{ //		____ ___d dddd ____
+{ //
+{ static inline word arg_r0_r31( word op ) { return(( op & 0x000F )|(( op >> 5 ) & 0x0010 )); \}
+{ static inline word arg_d0_d31( word op ) { return(( op >> 4 ) & 0x001F ); \}
+{
+{ //
+{ //	rrrr	= Source register (R16–R31)
+{ //	dddd	= Destination register (R16–R31)
+{ //
+{ //		____ ____ ____ rrrr
+{ //		____ ____ dddd ____
+{ //
+{ static inline word arg_r16_r31( word op ) { return(( op & 0x000F ) + 16 ); \}
+{ static inline word arg_d16_d31( word op ) { return((( op >> 4 ) & 0x000F ) + 16 ); \}
+{ //
+{ //		____ ____ ____ _rrr
+{ //		____ ____ _ddd ____
+{ //
+{ //	rrr	= Source register (R16–R23)
+{ //	ddd	= Destination register (R16–R23)
+{ //
+{ static inline word arg_r16_r23( word op ) { return(( op & 0x0007 ) + 16 ); \}
+{ static inline word arg_d16_d23( word op ) { return((( op >> 4 ) & 0x0007 ) + 16 ); \}
+{
+{ //
+{ //	RRRR	= Source register pair (R1:R0–R31:R30)
+{ //	DDDD	= Destination register pair (R1:R0–R31:R30)
+{ //
+{ //		____ ____ DDDD ____
+{ //		____ ____ ____ RRRR
+{ //
+{ //	Routines below return even numbers 0 through 30 (16 distinct values)
+{ //
+{ static inline word arg_r1r0_r31r30( word op ) { return(( op & 0x000F ) << 1 ); \}
+{ static inline word arg_d1d0_d31d30( word op ) { return(( op >> 3 ) & 0x001E ); \}
+{
+{ //
+{ //	dd	= Register pair W, X, Y or Z (R25:R24, R27:R26, R29:R28, R31:R30)
+{ //
+{ //		____ ____ __dd ____
+{ //
+{ //		Routine below returns even numbers 24 through 30 (4 distinct values)
+{ //
+{ static inline word arg_d24d25_d30d31( word op ) { return((( op >> 3 ) & 0x0006 ) + 24 ); \}
+{ static inline char arg_WXYZ( word op ) { return( 'W' + (( op >> 4 ) & 0x0003 )); \}
+{
+{ //
+{ //	aaaaaa	= I/O space address
+{ //	aaaaa	= I/O space address (first 32 only)
+{ //
+{ //		____ _aa_ ____ aaaa
+{ //		____ ____ aaaa a___
+{ //
+{ static inline word arg_a0_a63( word op ) { return(( op & 0x00F )|(( op >> 5 ) & 0x0030 )); \}
+{ static inline word arg_a0_a31( word op ) { return(( op >> 3 ) & 0x001F ); \}
+{
+{ //
+{ //	bbb	= Bit number (0–7)
+{ //	sss	= Flag in SREG
+{ //
+{ //		____ ____ ____ _bbb
+{ //		____ ____ _sss ____
+{ //
+{ //	Also provide flag index back to letter routine.
+{ //
+{ static inline word arg_bit( word op ) { return( op & 0x0007 ); \}
+{ static inline word arg_flag( word op ) { return(( op >> 4 ) & 0x0007 ); \}
+{ static inline char disp_flag( word flag ) {
+{ 	static const char flags[ 8 ] = { 'C', 'Z', 'N', 'V', 'S', 'H', 'T', 'I' \};
+{	if( word > 7 ) return( '?' );
+{	return( flags[ flag ]);
+{ \}
+{
+{ //
+{ //	kkkk		= 4-bit unsigned constant (DES opcode)
+{ //	KKKKKK		= 6-bit unsigned constant (adiw/sbiw word constant)
+{ //	kkkkkk		= 6-bit unsigned constant (YZ offset)
+{ //	KKKKKKKK	= 8-bit (un)signed constant (sign not meaningful in this context)
+{ //	kkkkkkkkkkkk	= 12 bit signed constant (relative calls/jumps)
+{ //
+{ //		____ ____ kkkk ____	4
+{ //		____ ____ KK__ KKKK	6_w (adiw/sbiw)
+{ //		__k_ kk__ ____ _kkk	6_o (YZ offset)
+{ //		____ KKKK ____ KKKK	8
+{ //		____ kkkk kkkk kkkk	12
+{ //
+{ static word arg_imm4( word op ) { return(( op >> 4 ) & 0x000F ); \}
+{ static word arg_imm6_w( word op ) { return(( op & 0x000F )|(( op >> 2 ) & 0x0030 )); \}
+{ static word arg_imm6_o( word op ) { return(( op & 0x0007 )|(( op >> 7 ) & 0x0018 )|(( op >> 8 ) & 0x0020 )); \}
+{ static word arg_imm8( word op ) { return(( op & 0x000F )|(( op >> 4 ) & 0x00F0 )); \}
+{
+{ //
+{ //	jjjjjj +16	= 6-bit and 16-bit unsigned constant (absolute PC)
+{ //	jjjjjjj		= 7-bit signed constant (relative branching)
+{ //	jjjjjjjjjjjj	= 12-bit signed constant (relative PC)
+{ //	
+{ //		____ ___j jjjj ___j	6 then 16 following.
+{ //		____ __jj jjjj j___	7
+{ //		____ jjjj jjjj jjjj	12
+{ //
+{ //	Absolute function only returns upper 6 bits.
+{ //
+{ static dword arg_absolute( word op ) { return(( op & 0x0001 ) | (( op >> 3 ) & 0x003E )); \}
+{ static dword arg_branch( word op ) { return( sign_extend<dword,7>(( op >> 3 ) & 0x7F )); \}
+{ static word arg_relative( word op ) { return( sign_extend<dword,12>( op & 0x0FFF ); \}
+{
+{ //	kkkkkk kkkkkkkkkkkkkkkk = 22 bit absolute program address
+{ //
+{ static dword arg_int22( word op, word arg ) {
+{ \}
+
+Define the specific details that the decoder encoder needs to know:
+
 {Z 16					}
 {W 1					}
-{L C++					}
 {T decoder_entry			}
 {S static				}
 {N decode_table				}
-{F op_					}
-{F pr_					}
+
+The output table will point to a data structure ('instruction') which
+contains pointers to routines that enact the various aspects of the
+identified instruction.
+
+{F &( inst_% )				}
 {E illegal				}
 
+Define the 'illegal' instruction implementation.  Here is as good as anywhere.
+
+	{ 
+	{ static word op_illegal( word opcode, AVR_State *state ) {
+	{ 	//
+	{ 	//	Called when any decoded opcode does not uniquely identify a
+	{ 	//	single specific instruction.
+	{ 	//
+	{ 	state->_error->raise( Illegal_Instruction, state->_pc, opcode );
+	{ 	//
+	{ 	//	Action here will depend on the CPU being
+	{ 	//	simulated.
+	{ 	//
+	{ 	//	At present nothing is being done on any CPU.
+	{ 	//
+	{ 	switch( state->_cpu ) {
+	{ 		case AVR_CPU: {
+	{ 			break;
+	{ 		\}
+	{ 		case AVRe_CPU: {
+	{ 			break;
+	{ 		\}
+	{ 		case AVRet_CPU: {
+	{ 			break;
+	{ 		\}
+	{ 		case AVRxm_CPU: {
+	{ 			break;
+	{ 		\}
+	{ 		case AVRxt_CPU: {
+	{ 			break;
+	{ 		\}
+	{ 		case AVRrc_CPU: {
+	{ 			break;
+	{ 		\}
+	{ 		default: {
+	{ 			//
+	{ 			//	Default is to ignore the illegal instruction
+	{ 			//	and continue program execution.
+	{ 			//
+	{ 			break;
+	{ 		\}
+	{ 	\}
+	{ 	//
+	{ 	//	All illegal instructions, if ignored, take one cycle.
+	{ 	//
+	{ 	return( 1 );
+	{ \}
+
+	{ static word dis_illegal( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ 	snprintf( buffer, max, "illegal %04X", opcode );
+	{ 	return( 1 );
+	{ \}
+
+{ static instruction inst_adc = { op_illegal, dis_illegal \};
+
+The remainder of this document captures each of the instructions, in alphabetical
+order.  The interpretation of the instructions encoding and actions is taken from
+the PDF document referenced at the start (AVR-Instruction-Set-Manual-DS40002198A).
+
+The section numbers provided with the instruction title reference directly back to
+this document.
+
+
+5.1. ADC – Add with Carry
+=========================
+{ //
+{ //	ADC Rd,Rr		Rd = Rd + Rr + C	(ROL Rd when Rd==Rr)
+{ //	
+{I 000111rdddddrrrr adc			}
+
+	{ static word op_adc( word opcode, AVR_State *state ) {
+	{ 	//
+	{ 	//	0001 11rd dddd rrrr
+	{ 	//
+	{ 	word	dr, dv,
+	{ 		rv,
+	{ 		cv, vv;
+	{ 	bool	c, n, v;
+	{ 	
+	{ 	rv = state->_regs->read( arg_r0_r31( opcode ));
+	{ 	dv = state->_regs->read( dr = arg_d0_d31( opcode ));
+	{ 	cv = ( c = state->get_C())? 1: 0;
+	{ 	vv = rv + dv + cv;
+	{ 	state->set_H( HALF( rv, dv, cv ));
+	{ 	state->set_V( v = (( SIGN( rv ) == SIGN( dv ))&&( SIGN( rv ) != SIGN( vv ))));
+	{ 	state->set_N( n = SIGN( vv ));
+	{ 	state->set_S( n ^ v );
+	{ 	state->set_C( vv & 0x100 );
+	{ 	state->set_Z(( vv = BYTE( vv )) == 0 );
+	{ 	state->_regs->write( dr, vv );
+	{ 	return( 1 );
+	{ \}
+
+	{ static word dis_adc( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ 	snprintf( buffer, max, "adc r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
+	{ 	return( 1 );
+	{ \}
+
+{ static instruction inst_adc = { op_adc, dis_adc \}; 
+
+
+5.2. ADD – Add without Carry
+============================
+{ //
+{ //	ADD Rd,Rr		Rd = Rd + Rr		(LSL Rd when Rd==Rr)
+{ //
+{I 000011rdddddrrrr add			}
+
+	{ static word op_add( word opcode, AVR_State *state ) {
+	{ 	//
+	{ 	//	0000 11rd dddd rrrr
+	{ 	//
+	{ 	word	dr, dv,
+	{ 		rv,
+	{ 		vv;
+	{ 	bool	n, v;
+	{ 	
+	{ 	rv = state->_regs->read( arg_r0_r31( opcode ));
+	{ 	dv = state->_regs->read( dr = arg_d0_d31( opcode ));
+	{ 	vv = rv + dv;
+	{ 	state->set_H( HALF( rv, dv, 0 ));
+	{ 	state->set_V( v = (( SIGN( rv ) == SIGN( dv ))&&( SIGN( rv ) != SIGN( vv ))));
+	{ 	state->set_N( n = SIGN( vv ));
+	{ 	state->set_S( n ^ v );
+	{ 	state->set_C( vv & 0x100 );
+	{ 	state->set_Z(( vv = BYTE( vv )) == 0 );
+	{ 	state->_regs->write( dr, vv );
+	{ 	return( 1 );
+	{ \}
+
+	{ static word dis_add( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ 	snprintf( buffer, max, "add r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
+	{ 	return( 1 );
+	{ \}
+
+{ static instruction inst_add = { op_add, dis_add \};
+
+
+5.3. ADIW – Add Immediate to Word
+=================================
+{ //
+{ //	ADIW Rd,k		Rd+1:Rd += k		(where "d=24+(dd<<1)" and k is unsigned 6 bit value)
+{ //
+	
+Note:
+	The below 'adiw' (and 'sbiw') instructions can be considered to be
+	as (mnemonically) operating against the registers W, X, Y or Z.
+	In this case the instructions could be viewed as:
+
+		ADIW	[WXYZ],k
+	and
+		SBIW	[WXYZ],k
+		
+{I 10010110KKddKKKK adiw		}
+
+	{ static word op_adiw( word opcode, AVR_State *state ) {
+	{ 	//
+	{ 	//	1001 0110 KKdd KKKK
+	{ 	//
+	{ 	static byte ticks[ AVR_Types ] = { 2, 2, 2, 2, 2, 0 \};
+	{ 	
+	{ 	word	clocks,
+	{ 		dr, dv,
+	{ 		vv, kk;
+	{ 	bool	n, v;
+	{ 	
+	{ 	if(( clocks = ticks[ state->_cpu ]) == 0 ) state->_error->raise( Unsupported_Instruction, state->_pc, opcode );
+	{ 	dr = arg_d24d25_d30d31( opcode );
+	{ 	dv = COMBINE( state->_regs->read( dr+1 ),  state->_regs->read( dr ));
+	{ 	kk = arg_imm6_w( opcode );
+	{ 	vv = dv + kk;
+	{ 	state->set_V( v = ( SIGNW( dv ) != SIGNW( vv )));
+	{ 	state->set_N( n = SIGNW( vv ));
+	{ 	state->set_S( n ^ v );
+	{ 	state->set_C(( SIGNW( dv ))&&( !SIGNW( vv )));
+	{ 	state->set_Z( vv == 0 );
+	{ 	state->_regs->write( dr, LSBYTE( vv ));
+	{ 	state->_regs->write( dr + 1, MSBYTE( vv ));
+	{ 	return( clocks );
+	{ \}
+
+	{ static word dis_adiw( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ 	snprintf( buffer, max, "adiw %c,0x%02X", arg_WXYZ( opcode ), (int)arg_imm6_w( opcode ));
+	{ 	return( 1 );
+	{ \}
+
+{ static instruction inst_adiw = { op_adiw, dis_adiw \};
+
+
+5.4 AND – Logical AND
+=====================
+{ //
+{ //	AND Rd,Rr		Rd = Rd & Rr
+{ //
+{I 001000rdddddrrrr and			}
+
+	{ static word op_and( word opcode, AVR_State *state ) {
+	{ 	//
+	{ 	//	0010 00rd dddd rrrr
+	{ 	//
+	{ 	word	dr, dv,
+	{ 		rv,
+	{ 		vv;
+	{ 	bool	n;
+	{ 	
+	{ 	rv = state->_regs->read( arg_r0_r31( opcode ));
+	{ 	dv = state->_regs->read( dr = arg_d0_d31( opcode ));
+	{ 	vv = rv & dv;
+	{ 	state->set_V( false );
+	{ 	state->set_N( n = SIGN( vv ));
+	{ 	state->set_S( n );
+	{ 	state->set_Z( vv == 0 );
+	{ 	state->_regs->write( dr, vv );
+	{ 	return( 1 );
+	{ \}
+
+	{ static word dis_and( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ 	snprintf( buffer, max, "and r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
+	{ 	return( 1 );
+	{ \}
+
+{ static instruction inst_and = { op_and, dis_and \};
+
+
+5.5 ANDI – Logical AND with Immediate
+=====================================
+{ //
+{ //	ANDI Rd,K		Rd = Rd & K		(And with 8-bit immediate. Also: CBR Rd,~K)
+{ //
+{I 0111KKKKddddKKKK andi		}
+
+	{ static word op_andi( word opcode, AVR_State *state ) {
+	{ 	//
+	{ 	//	0111 KKKK dddd KKKK
+	{ 	//
+	{ 	word	dr, vv;
+	{ 	bool	n;
+	{ 	
+	{ 	vv = state->_regs->read( dr = arg_d16_d31( opcode )) & arg_imm8( opcode );
+	{ 	state->set_V( false );
+	{ 	state->set_N( n = SIGN( vv ));
+	{ 	state->set_S( n );
+	{ 	state->set_Z( vv == 0 );
+	{ 	state->_regs->write( dr, vv );
+	{ 	return( 1 );
+	{ \}
+
+	{ static word dis_andi( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ 	snprintf( buffer, max, "andi r%d,0x%02X", (int)arg_d0_d31( opcode ), (int)arg_imm8( opcode ));
+	{ 	return( 1 );
+	{ \}
+
+{ static instruction inst_andi = { op_andi, dis_andi \};
+
+
+5.6 ASR – Arithmetic Shift Right
+================================
+{ //
+{ //	ASR Rd		Rd = Rd / 2		(Arithmetic right shift)
+{ //
+{I 1001010ddddd0101 asr			}
+
+	{ static word op_asr( word opcode, AVR_State *state ) {
+	{ 	//
+	{ 	//	1001 010d dddd 0101
+	{ 	//
+	{ 	word	dr, dv,
+	{ 		vv;
+	{ 	bool	n;
+	{ 	
+	{ 	dv = state->_regs->read( dr = arg_d0_d31( opcode ));
+	{ 	state->set_N( n = SIGN( dv ));
+	{ 	vv = ( dv >> 1 ) | ( n? 0x80: 0x00 );
+	{ 	state->set_V( false );
+	{ 	state->set_S( n );
+	{ 	state->set_Z( vv == 0 );
+	{ 	state->set_C( LSBIT( dv ));
+	{ 	state->_regs->write( dr, vv );
+	{ 	return( 1 );
+	{ \}
+
+	{ static word dis_asr( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ 	snprintf( buffer, max, "asr r%d", (int)arg_d0_d31( opcode ));
+	{ 	return( 1 );
+	{ \}
+
+{ static instruction inst_asr = { op_asr, dis_asr \};
+
+
+5.7 BCLR – Bit Clear in SREG
+============================
+{ //
+{ //	BCLR s		SREG[s] = 0		(0 <= d <= 31, 0 <= b <= 7)
+{ //
+{I 100101001sss1000			}
+
+	{ static word op_bclr( word opcode, AVR_State *state ) {
+	{ 	//
+	{ 	//	1001 0100 1sss 1000
+	{ 	//
+	{ 	*(state->_sr) &= ~( 1 << arg_flag( opcode ));
+	{ 	return( 1 );
+	{ \}
+
+	{ static word dis_bclr( word opcode, AVR_State *state, char *buffer, int max ) {
+	{	int f = arg_flag( opcode );
+	{ 	snprintf( buffer, max, "bclr %d(%c)", f, disp_flag( f ));
+	{ 	return( 1 );
+	{ \}
+
+{ static instruction inst_bclr = { op_bclr, dis_bclr \};
+
+
+5.8 BLD – Bit Load from the T Bit in SREG to a Bit in Register
+==============================================================
+{ //
+{ //	BLD Rd,b		Rd[b] = T
+{ //
+{I 1111100ddddd0bbb bld			}
+
+	{ static word op_bld( word opcode, AVR_State *state ) {
+	{ 	//
+	{ 	//	1111 100d dddd 0bbb
+	{ 	//
+	{ 	word	dr, dv;
+	{ 	
+	{ 	dv = state->_regs->read( dr = arg_d0_d31( opcode ));
+	{ 	if( state->get_T()) {
+	{ 		dv |= 1 << arg_bit( opcode );
+	{ 	\}
+	{ 	else {
+	{ 		dv &= ~( 1 << arg_bit( opcode ));
+	{ 	\}
+	{ 	state->_regs->write( dr, dv );
+	{ 	return( 1 );
+	{ \}
+
+	{ static word dis_bld( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ 	snprintf( buffer, max, "bld r%d,%d", arg_d0_d31( opcode ), arg_bit( opcode ));
+	{ 	return( 1 );
+	{ \}
+
+{ static instruction inst_bld = { op_bld, dis_bld \};
+
+
+5.9 BRBC – Branch if Bit in SREG is Cleared
+===========================================
+{ //
+{ //	BRBC s,k		If SREG(s) == 0 then PC ← PC + k + 1, else PC ← PC + 1
+{ //
+{I 111101jjjjjjjbbb brbc		}
+
+	{ static word op_brbc( word opcode, AVR_State *state ) {
+	{ 	//
+	{ 	//	1111 01jj jjjj jbbb
+	{ 	//
+	{ 	if(( *(state->_sr) & ( 1 << arg_bit( opcode ))) == 0 ) {
+	{ 		state->_pc += arg_branch( opcode );
+	{ 		return( 2 );
+	{ 	\}
+	{ 	return( 1 );
+	{ \}
+
+	{ static word dis_brbc( word opcode, AVR_State *state, char *buffer, int max ) {
+	{	int j = arg_branch( opcode );
+	{	int f = arg_bit( opcode );
+	{	if( SIGNW( j )) HERE JEFF
+	{ 	snprintf( buffer, max, "brbc %d(%c),%d", f, disp_flag( f ), j );
+	{ 	return( 1 );
+	{ \}
+	{ 	snprintf( buffer, max, "bclr );
+
+{ static instruction inst_brbc = { op_brbc, dis_brbc \};
+
+
+5.10 BRBS – Branch if Bit in SREG is Set
+========================================
+
+	BRBS s,k		If SREG(s) == 1 then PC ← PC + k + 1, else PC ← PC + 1
+
+{I 111100jjjjjjjbbb brbs		}
+	{ static word op_brbs( word opcode, AVR_State *state ) {
+	{ 	//
+	{ 	//	1111 01jj jjjj jbbb
+	{ 	//
+	{ 	if(( *(state->_sr) & ( 1 << arg_bit( opcode ))) != 0 ) {
+	{ 		state->_pc += arg_branch( opcode );
+	{ 		return( 2 );
+	{ 	\}
+	{ 	return( 1 );
+	{ \}
+
+
+5.11 BRCC – Branch if Carry Cleared
+===================================
+
+	See BRBC 0,j
+
+
+5.12 BRCS – Branch if Carry Set
+===============================
+
+	See BRBS 0,j
+
+
+5.13 BREAK – Break
+==================
+
+	BREAK						(Stop CPU, enter debug mode)
+	
+{I 1001010110011000 break		} 
+	{ static word op_break( word opcode, AVR_State *state ) {
+	{ 	//
+	{ 	//	1001 0101 1001 1000
+	{ 	//
+	{ 	static byte ticks[ AVR_Types ] = { 0, 1, 1, 1, 1, 1 \};
+	{ 	
+	{ 	word	clocks;
+	{ 	
+	{ 	if(( clocks = ticks[ state->_cpu ]) == 0 ) state->_error->raise( Unsupported_Instruction, state->_pc, opcode );
+	{ 	return( clocks );
+	{ \}
+
+
+5.14 BREQ – Branch if Equal
+===========================
+
+	See BRBS 1,j
+
+
+5.15 BRGE – Branch if Greater or Equal (Signed)
+===============================================
+
+	See BRBC 4,j
+
+
+5.16 BRHC – Branch if Half Carry Flag is Cleared
+================================================
+
+	See BRBC 5,j
+
+
+5.17 BRHS – Branch if Half Carry Flag is Set
+============================================
+
+	See BRBS 5,j
+
+
+5.18 BRID – Branch if Global Interrupt is Disabled
+==================================================
+
+	See BRBC 7,j
+
+
+5.19 BRIE – Branch if Global Interrupt is Enabled
+=================================================
+
+	See BRBS 7,j
+
+
+5.20 BRLO – Branch if Lower (Unsigned)
+======================================
+
+	BRLO is an alias for BRCS: BRBS 1,j
+
+
+5.21 BRLT – Branch if Less Than (Signed)
+========================================
+
+	See BRBS 4,j
+
+
+5.22 BRMI – Branch if Minus
+===========================
+
+	See BRBS 2,j
+
+	
+5.23 BRNE – Branch if Not Equal
+===============================
+
+	See BRBC 1,j
+
+
+5.24 BRPL – Branch if Plus
+==========================
+
+	See BRBC 2,j
+
+
+5.25 BRSH – Branch if Same or Higher (Unsigned)
+===============================================
+
+	See BRBC 0,j
+
+
+5.26 BRTC – Branch if the T Bit is Cleared
+==========================================
+
+	See BRBC 6,j
+
+
+5.27 BRTS – Branch if the T Bit is Set
+======================================
+
+	See BRBS 6,j
+
+
+5.28 BRVC – Branch if Overflow Cleared
+======================================
+
+	See BRBC 3,j
+
+
+5.29 BRVS – Branch if Overflow Set
+==================================
+
+	See BRBS 3,j
+
+
+5.30 BSET – Bit Set in SREG
+===========================
+
+	BSET s			SREG[s] = 1
+
+{I 100101000sss1000 bset		}
+	{ static word op_bset( word opcode, AVR_State *state ) {
+	{ 	//
+	{ 	//	1001 0100 0sss 1000
+	{ 	//
+	{ 	*(state->_sr) |= 1 << arg_flag( opcode );
+	{ 	return( 1 );
+	{ \}
+
+
+
+5.31 BST – Bit Store from Bit in Register to T Bit in SREG
+==========================================================
+
+	BST Rd,b		T = Rd[b]
+
+{I 1111101ddddd0bbb bst			} 
+	{ static word op_bst( word opcode, AVR_State *state ) {
+	{ word op_bst( word opcode, AVR_State *state ) {
+	{ 	//
+	{ 	//	1111 101d dddd 0bbb
+	{ 	//
+	{ 	state->set_T(( state->_regs->read( arg_d0_d31( opcode )) & ( 1 << arg_bit( opcode ))) != 0 );
+	{ 	return( 1 );
+	{ \}
+
+
+5.32 CALL – Long Call to a Subroutine
+=====================================
+
+	CALL j		DS(STACK-) = PC, PC = j
+
+{I 1001010jjjjj111j jjjjjjjjjjjjjjjj call }
+	{ static word op_call( word opcode, AVR_State *state ) {
+	{	//
+	{	//	1001 010j jjjj 111j
+	{	//	jjjj jjjj jjjj jjjj
+	{	//
+	{ 	static byte ticks[ AVR_Types ] = { 4, 4, 4, 3, 3, 0 \};
+	{
+	{	word	clocks,
+	{		msword,
+	{		lsword;
+	{
+	{	if(( clocks = ticks[ state->_cpu ]) == 0 ) {
+	{		state->_error->raise( Unsupported_Instruction, state->_pc, opcode );
+	{	\}
+	{	else {
+	{		if( state->_pas > 8 ) clocks++;
+	{	\}
+	{	state->push_pc( arg_absolute( opcode ), state->read_opcode());
+	{	return( clocks );
+	{ \}
+
+
+5.33 CBI – Clear Bit in I/O Register
+====================================
+
+	CBI a,b		IO(a)[b] = 0		(Clear bit b in IO register a)
+
+{I 10011000aaaaabbb cbi			} 
+	{ static word op_cbi( word opcode, AVR_State *state ) {
+	{	//
+	{	//	1001 1000 aaaa abbb
+	{	//
+	{	word	ir;
+	{	byte	iv;
+	{
+	{	iv = state->_io->read( ir = arg_a0_a31( opcode ));
+	{	state->_io->write( ir, iv & ~( 1 << arg_bit( opcode )));
+	{ 	return( 0 );
+	{ \}
+
+
+
 {I 0000000000000000 nop			} NOP						(No Operation)
+	{ static word op_nop( word opcode, AVR_State *state ) {
+	{	//
+	{	//	0000 0000 0000 0000
+	{	//
+	{ 	return( 1 );
+	{ \}
+
 {I 00000001DDDDRRRR movw		} MOVW Rd+1:Rd,Rr+1:Rr	Rd+1:Rd = Rr+1:Rr	(Move register pair)
+	{ static word op_movw( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 00000010ddddrrrr muls		} MULS Rd,Rr		R1:R0 = Rd x Rr		(signed = signed x signed)
+	{ static word op_muls( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 {I 000000110ddd0rrr mulsu		} MULSU Rd,Rr		R1:R0 = Rd x Rr		(signed = signed x unsigned)
+	{ static word op_mulsu( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 000000110ddd1rrr fmul		} FMUL Rd,Rr		R1:R0 = Rd x Rr		(unsigned (1.15) = unsigned (1.7) x unsigned (1.7))
+	{ static word op_fmul( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 000000111ddd0rrr fmuls		} FMULS Rd,Rr		R1:R0 = Rd x Rr		(signed (1.15) = signed (1.7) x signed (1.7))
+	{ static word op_fmuls( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 000000111ddd1rrr fmulsu		} FMULSU Rd,Rr		R1:R0 = Rd x Rr		(signed (1.15) = signed (1.7) x unsigned (1.7))
+	{ static word op_fmulsu( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 {I 000001rdddddrrrr cpc			} CPC Rd,Rr		Rd - Rr - C		(Compare with Carry)
+	{ static word op_cpc( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 000010rdddddrrrr sbc			} SBC Rd,Rr		Rd = Rd - Rr - C
-{I 000011rdddddrrrr add			} ADD Rd,Rr		Rd = Rd + Rr		(LSL Rd when Rd==Rr)
+	{ static word op_sbc( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 000100rdddddrrrr cpse		} CPSE Rd,Rr		Skip next instruction if Rd == Rr
+	{ static word op_cpse( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 000101rdddddrrrr cp			} CP Rd,Rr		Rd - Rr			(Compare)
+	{ static word op_cp( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 000110rdddddrrrr sub			} SUB Rd,Rr		Rd = Rd - Rr
-{I 000111rdddddrrrr adc			} ADC Rd,Rr		Rd = Rd + Rr + C	(ROL Rd when Rd==Rr)
-{I 001000rdddddrrrr and			} AND Rd,Rr		Rd = Rd & Rr
+	{ static word op_sub( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 001001rdddddrrrr eor			} EOR Rd,Rr		Rd = Rd ^ Rr
+	{ static word op_eor( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 001010rdddddrrrr or			} OR Rd,Rr		Rd = Rd | Rr
+	{ static word op_or( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 001011rdddddrrrr mov			} MOV Rd,Rr		Rd = Rr
+	{ static word op_mov( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 {I 0011KKKKddddKKKK cpi			} CPI Rd,K		Rd - K			(Compare with 8-bit immediate)
+	{ static word op_cpi( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 0100KKKKddddKKKK sbci		} SBCI Rd,K		Rd = Rd - K - C		(Subtract 8-bit immediate and Carry)
+	{ static word op_sbci( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 0101KKKKddddKKKK subi		} SUBI Rd,K		Rd = Rd - K		(Subtract 8-bit immediate)
+	{ static word op_subi( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 0110KKKKddddKKKK ori			} ORI Rd,K		Rd = Rd | K		(Or with 8-bit immediate. Also: SBR Rd,K)
-{I 0111KKKKddddKKKK andi		} ANDI Rd,K		Rd = Rd & K		(And with 8-bit immediate. Also: CBR Rd,~K)
+	{ static word op_ori( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 {I 1001000ddddd0000 kkkkkkkkkkkkkkkk lds } LDS rd,k		Rd = DS(RAMPD:k)	(Data Space Immediate address)
+	{ static word op_lds( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 {I 1001010111001000 lpm_r0		} LPM			R0 = PS(Z)
+	{ static word op_lpm_r0( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001000ddddd0100 lpm_z		} LPM Rd,Z		Rd = PS(Z)
+	{ static word op_lpm_z( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001000ddddd0101 lpm_zp		} LPM Rd,Z+		Rd = PS(Z+)
+	{ static word op_lpm_zp( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 {I 1001010111011000 elpm_r0		} ELPM			R0 = PS(RAMPZ:Z)
+	{ static word op_elpm_r0( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001000ddddd0110 elpm_z		} ELPM Rd,Z		Rd = PS(RAMPZ:Z)
+	{ static word op_elpm_z( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001000ddddd0111 elpm_zp		} ELPM Rd,Z+		Rd = PS(RAMPZ:Z+)
+	{ static word op_elpm_zp( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 
 {I 1001000ddddd1100 ld_x		} LD Rd,X		Rd = DS(X)
+	{ static word op_ld_x( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001000ddddd1101 ld_xp		} LD Rd,X+		Rd = DS(X+)
+	{ static word op_ld_xp( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001000ddddd1110 ld_nx		} LD Rd,-X		Rd = DS(-X)
+	{ static word op_ld_nx( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001000ddddd1111 pop			} POP Rd		Rd = DS(+STACK)
+	{ static word op_pop( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 
 Note:
 	Documentation indicates that there are mnemonics for the
@@ -152,24 +1612,80 @@ Note:
 	'LD RD,Y+0' and 'LD Rd,Z+0'
 
 {I 10q0qq0ddddd1qqq ld_y_q		} LD RD,Y+q		Rd = DS(Y+q)			(See Note)
+	{ static word op_ld_y_q( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001000ddddd1001 ld_yp		} LD Rd,Y+		Rd = DS(Y+)
+	{ static word op_ld_yp( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001000ddddd1010 ld_ny		} LD Rd,−Y		Rd = DS(-Y)
+	{ static word op_ld_ny( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 {I 10q0qq0ddddd0qqq ld_z_q		} LD Rd,Z+q		Rd = DS(Z+q)			(See Note)
+	{ static word op_ld_z_q( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001000ddddd0001 ld_zp		} LD Rd,Z+		Rd = DS(Z+)
+	{ static word op_ld_zp( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001000ddddd0010 ld_nz		} LD Rd,−Z		Rd = DS(-Z)
+	{ static word op_ld_nz( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 {I 1001001ddddd0000 kkkkkkkkkkkkkkkk sts } STS k,rd		DS(RAMPD:k) = Rd
+	{ static word op_sts( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 {I 1001001ddddd0100 xch			} XCH Z,Rd 		DS(Z) <-> Rd
-{I 1001001ddddd0101 las			} LAS Z,Rd		DS(Z) = DS(Z) | Rd, Rd = DS(Z)	(Atomic read and set)
-{I 1001001ddddd0110 lac			} LAC Z,Rd		DS(Z) = DS(Z) & ~Rd, Rd = DS(Z)	(Atomic read and clear)
-{I 1001001ddddd0111 lat			} LAT Z,Rd		DS(Z) = DS(Z) ^ Rd, Rd = DS(Z)	(Atomic read and toggle)
+	{ static word op_xch( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
-{I 1001001ddddd1100 st			} ST X,Rd		DS(X) = Rd
-{I 1001001ddddd1101 st			} ST X+,Rd		DS(X+) = Rd
-{I 1001001ddddd1110 st			} ST -X,Rd		DS(-X) = Rd
+{I 1001001ddddd0101 las			} LAS Z,Rd		DS(Z) = DS(Z) | Rd, Rd = DS(Z)	(Atomic read and set)
+	{ static word op_las( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
+{I 1001001ddddd0110 lac			} LAC Z,Rd		DS(Z) = DS(Z) & ~Rd, Rd = DS(Z)	(Atomic read and clear)
+	{ static word op_lac( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
+{I 1001001ddddd0111 lat			} LAT Z,Rd		DS(Z) = DS(Z) ^ Rd, Rd = DS(Z)	(Atomic read and toggle)
+	{ static word op_lat( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
+{I 1001001ddddd1100 st_x		} ST X,Rd		DS(X) = Rd
+	{ static word op_st_x( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
+{I 1001001ddddd1101 st_xp		} ST X+,Rd		DS(X+) = Rd
+	{ static word op_st_xp( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
+{I 1001001ddddd1110 st_nx		} ST -X,Rd		DS(-X) = Rd
+	{ static word op_st_nx( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001001ddddd1111 push		} PUSH Rd		DS(STACK-) = Rd
+	{ static word op_push( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 
 Note:
 	Documentation indicates that there are mnemonics for the
@@ -179,15 +1695,45 @@ Note:
 	'ST Y+0,Rd' and 'ST Z+0,Rd'
 
 {I 10q0qq1rrrrr1qqq std_y_q		} STD Y+q,Rd		DS(Y+q) = Rd			(See Note)
+	{ static word op_std_y_q( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001001ddddd1001 st_yp		} ST Y+,Rd		DS(Y+) = Rd
+	{ static word op_st_yp( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001001ddddd1010 st_ny		} ST −Y,Rd		DS(-Y) = Rd
+	{ static word op_st_ny( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 {I 10q0qq1rrrrr0qqq std_z_q		} STD Z+q,Rd		DS(Z+q) = Rd			(See Note)
+	{ static word op_std_z_q( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001001ddddd0001 st_zp		} ST Z+,Rd		DS(Z+) = Rd
+	{ static word op_st_zp( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001001ddddd0010 st_nz		} ST −Z,Rd		DS(-Z) = Rd
+	{ static word op_st_nz( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 {I 1001010000001001 ijmp		} IJMP			PC = Z
+	{ static word op_ijmp( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010000011001 eijmp		} EIJMP			PC = EIND:Z
+	{ static word op_eijmp( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 
 Note:
 	The "BCLR" instruction is a mnemonic version of the eight "CL?"
@@ -196,13 +1742,44 @@ Note:
 	"100101001sss1000 BCLR s" where sss is the SREG bit number to clear.
 
 {I 1001010010001000 clc			} CLC			C = 0
+	{ static word op_clc( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010010011000 clz			} CLZ			Z = 0
+	{ static word op_clz( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010010101000 cln			} CLN			N = 0
+	{ static word op_cln( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010010111000 clv			} CLV			V = 0
+	{ static word op_clv( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010011001000 cls			} CLS			S = 0
+	{ static word op_cls( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010011011000 clh			} CLH			H = 0
+	{ static word op_clh( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010011101000 clt			} CLT			T = 0
+	{ static word op_clt( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010011111000 cli			} CLI			I = 0
+	{ static word op_cli( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 Note:
 	The "BSET" instruction is a mnemonic version of the eight "SE?"
@@ -211,121 +1788,247 @@ Note:
 	"100101000sss1000 BCLR s" where sss is the SREG bit number to set.
 
 {I 1001010000001000 sec			} SEC			C = 1
+	{ static word op_sec( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010000011000 sez			} SEZ			Z = 1
+	{ static word op_sez( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010000101000 sen			} SEN			N = 1
+	{ static word op_sen( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010000111000 sev			} SEV			V = 1
+	{ static word op_sev( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010001001000 ses			} SES			S = 1
+	{ static word op_ses( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010001011000 seh			} SEH			H = 1
+	{ static word op_seh( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010001101000 set			} SET			T = 1
+	{ static word op_set( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010001111000 sei			} SEI			I = 1
+	{ static word op_sei( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 {I 10010100kkkk1011 des			} DES k			Data Encryption Action 'k'
+	{ static word op_des( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 {I 1001010100001000 ret			} RET			PC = DS(+STACK)		(Pops 2 or 3 bytes as appropriate to AVR architecture)
-{I 1001010100001001 icall		} ICALL Z		DS(STACK-) = PC, PC = Z	(Pushes 2 or 3 bytes)
-{I 1001010100011000 reti		} RETI			PC = DS(+STACK),I = 1
-{I 1001010100011001 eicall		} EICALL Z		DS(STACK-) = PC, PC = EIND:Z
+	{ static word op_ret( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
-{I 10010101001x1000 reserved		} 			Reserved
-{I 1001010101xx1000 reserved		} 			Reserved
+{I 1001010100001001 icall		} ICALL Z		DS(STACK-) = PC, PC = Z	(Pushes 2 or 3 bytes)
+	{ static word op_icall( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
+{I 1001010100011000 reti		} RETI			PC = DS(+STACK),I = 1
+	{ static word op_reti( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
+{I 1001010100011001 eicall		} EICALL Z		DS(STACK-) = PC, PC = EIND:Z
+	{ static word op_eicall( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 {I 1001010110001000 sleep		} SLEEP						(Put CPU into sleep mode)
-{I 1001010110011000 break		} BREAK						(Stop CPU, enter debug mode)
+	{ static word op_sleep( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010110101000 wdr			} WDR						(Restart Watch Dog Timer)
-{I 1001010110111000 reserved		} 			Reserved 
+	{ static word op_wdr( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010111101000 spm			} SPM						(See section 116 in "AVR Instruction Set Manual")
 {I 1001010111111000 spm			} SPM Z+ 					(See section 117 in "AVR Instruction Set Manual")
+	{ static word op_spm( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 
 {I 1001010ddddd0000 com			} COM Rd		Rd = ~Rd		(Ones complement)
+	{ static word op_com( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010ddddd0001 neg			} NEG Rd		Rd = -Rd		(Twos complement)
+	{ static word op_neg( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010ddddd0010 swap		} SWAP Rd		Rd[0:3] <-> Rd[7:4]	(Swap nibbles in Rd)
+	{ static word op_swap( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010ddddd0011 inc			} INC Rd		Rd = Rd + 1		(Increment Rd)
-{I 1001010ddddd0100 reserved		} 			Reserved
-{I 1001010ddddd0101 asr			} ASR Rd		Rd = Rd / 2		(Arithmetic right shift)
+	{ static word op_inc( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010ddddd0110 lsr			} LSR Rd		Rd = Rd >> 1		(Logical right shift)
+	{ static word op_lsr( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010ddddd0111 ror			} ROR Rd		C -> Rd -> C		(Rotate right Rd through Carry)
+	{ static word op_ror( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1001010ddddd1010 dec			} DEC Rd		Rd = Rd - 1
+	{ static word op_dec( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 {I 1001010kkkkk110k kkkkkkkkkkkkkkkk jmp } JMP k		PC = k
-{I 1001010kkkkk111k kkkkkkkkkkkkkkkk call } CALL k		DS(STACK-) = PC, PC = k
+	{ static word op_jmp( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
-Note:
-	The below 'adiw' and 'sbiw' instructions can be considered to be
-	as (mnemonically) operating against the registers W, X, Y or Z.
-	In this case the instructions would be viewed as:
-
-		ADIW	[WXYZ],k
-	and
-		SBIW	[WXYZ],k
-		
-{I 10010110kkddkkkk adiw		} ADIW Rd,k		Rd+1:Rd += k		(where "d=24+(dd<<1)" and k is unsigned 6 bit value) 
 {I 10010111kkddkkkk sbiw		} SBIW Rp,k		Rd+1:Rd -= k		(where "d=24+(dd<<1)" and k is unsigned 6 bit value)
+	{ static word op_sbiw( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
-{I 10011000aaaaabbb cbi			} CBI a,b		IO(a)[b] = 0		(Clear bit b in IO register a)
 {I 10011001aaaaabbb sbic		} SBIC a,b		If IO(a)[b] == 0 skip	(Skip next instruction if bit b in IO register a is clear)
+	{ static word op_sbic( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 10011010aaaaabbb sbi			} SBI a,b		IO(a)[b] = 1		(Set bit b in IO register a)
+	{ static word op_sbi( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 10011011aaaaabbb sbis		} SBIS a,b		If IO(a)[b] == 1 skip	(Skip next instruction if bit b in IO register a is set)
+	{ static word op_sbis( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 100111rdddddrrrr mul			} MUL Rd,Rr		R1:R0 = Rr x Rd		(unsigned = unsigned x unsigned)
+	{ static word op_mul( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 10110aadddddaaaa in			} IN Rd,a		Rd = IO(a)		(Output register to IO address)
+	{ static word op_in( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 10111aadddddaaaa out			} OUT a,Rd		IO(a) = Rd		(Read register from IO address)
+	{ static word op_out( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
 {I 1100jjjjjjjjjjjj rjmp		} RJMP j		PC = PC + j		(Relative jump, j is signed 12 bit immediate)
+	{ static word op_rjmp( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1101jjjjjjjjjjjj rcall		} RCALL j		DS(STACK-) = PC, PC = PC + j (Relative call, j is signed 12 bit immediate)
+	{ static word op_rcall( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1110KKKKddddKKKK ldi			} LDI Rd,K		Rd = K			(Load register with 8 bit immediate)
+	{ static word op_ldi( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
-Note:
-	The "BRBS" instruction is a mnemonic version of the eight "BR?S"
-	instructions, and is therefore does not require encoding individually.
 
-	"111100kkkkkkkbbb BRBS bbb,kkkkkkk" where sss is the SREG bit to check
-	and kkkkkk is the relative jump to make if it is set.
-
-	Other aliases are:
-
-		BREQ -> BRZS
-		BRLO -> BRCS
-		BRIE -> BRIS
-		BRLT -> BRSS
-		BRMI -> BRNS
-
-{I 111100jjjjjjj000 brcs		} BRCS/BRLO j		if C == 1 then PC = PC + j	(j is 7-bit signed offset)
 {I 111100jjjjjjj001 brzs		} BRZS/BREQ j		if Z == 1 then PC = PC + j	(j is 7-bit signed offset)
+	{ static word op_brzs( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 111100jjjjjjj010 brns		} BRNS/BRMI j		if N == 1 then PC = PC + j	(j is 7-bit signed offset)
+	{ static word op_brns( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 111100jjjjjjj011 brvs		} BRVS j		if V == 1 then PC = PC + j	(j is 7-bit signed offset)
+	{ static word op_brvs( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 111100jjjjjjj100 brss		} BRSS/BRLT j		if S == 1 then PC = PC + j	(j is 7-bit signed offset)
-{I 111100jjjjjjj101 brhs		} BRHS j		if H == 1 then PC = PC + j	(j is 7-bit signed offset)
+	{ static word op_brss( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 111100jjjjjjj110 brts		} BRTS j		if T == 1 then PC = PC + j	(j is 7-bit signed offset)
-{I 111100jjjjjjj111 bris		} BRIS/BRIE j		if I == 1 then PC = PC + j	(j is 7-bit signed offset)
+	{ static word op_brts( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
-Note:
-	The "BRBC" instruction is a mnemonic version of the eight "BR?C"
-	instructions, and is therefore does not require encoding individually.
-
-	"111101kkkkkkkbbb BRBC bbb,kkkkkkk" where sss is the SREG bit to check
-	and kkkkkk is the relative jump to make if it is clear.
-
-	Other aliases are:
-
-		BRNE -> BRZC
-		BRGE -> BRSC
-		BRID -> BRIC
-		BRPL -> BRNC
-		BRSH -> BRCC
-
-{I 111101jjjjjjj000 brcc		} BRCC/BRSH j		if C == 0 then PC = PC + j	(j is 7-bit signed offset)
 {I 111101jjjjjjj001 brzc		} BRZC/BRNE j		if Z == 0 then PC = PC + j	(j is 7-bit signed offset)
-{I 111101jjjjjjj010 brnc		} BRNC/BRPL j		if N == 0 then PC = PC + j	(j is 7-bit signed offset)
-{I 111101jjjjjjj011 brvc		} BRVC j		if V == 0 then PC = PC + j	(j is 7-bit signed offset)
-{I 111101jjjjjjj100 brsc		} BRSC/BRGE j		if S == 0 then PC = PC + j	(j is 7-bit signed offset)
-{I 111101jjjjjjj101 brhc		} BRHC j		if H == 0 then PC = PC + j	(j is 7-bit signed offset)
-{I 111101jjjjjjj110 brtc		} BRTC j		if T == 0 then PC = PC + j	(j is 7-bit signed offset)
-{I 111101jjjjjjj111 bric		} BRIC/BRID j		if I == 0 then PC = PC + j	(j is 7-bit signed offset)
+	{ static word op_brzc( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
 
-{I 1111100ddddd0bbb bld			} BLD Rd,b		Rd[b] = T
-{I 1111101ddddd0bbb bst			} BST Rd,b		T = Rd[b]
+{I 111101jjjjjjj010 brnc		} BRNC/BRPL j		if N == 0 then PC = PC + j	(j is 7-bit signed offset)
+	{ static word op_brnc( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
+{I 111101jjjjjjj011 brvc		} BRVC j		if V == 0 then PC = PC + j	(j is 7-bit signed offset)
+	{ static word op_brvc( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
+{I 111101jjjjjjj100 brsc		} BRSC/BRGE j		if S == 0 then PC = PC + j	(j is 7-bit signed offset)
+	{ static word op_brsc( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
+{I 111101jjjjjjj110 brtc		} BRTC j		if T == 0 then PC = PC + j	(j is 7-bit signed offset)
+	{ static word op_brtc( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1111110ddddd0bbb sbrc		} SBRC Rd,b		Skip next if Rd[b] == 0
+	{ static word op_sbrc( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 {I 1111111ddddd0bbb sbrs		} SBRS Rd,b		Skip next if Rd[b] == 1
+	{ static word op_sbrs( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
+{I 1001010110111000 reserved		} 			Reserved 
+{I 10010101001x1000 reserved		} 			Reserved
+{I 1001010101xx1000 reserved		} 			Reserved
+{I 1001010ddddd0100 reserved		} 			Reserved
 {I 11111xxddddd1bbb reserved		} 			Reserved
+	{ static word op_reserved( word opcode, AVR_State *state ) {
+	{ 	return( 0 );
+	{ \}
+
 
 End of Instruction data.
 ========================
