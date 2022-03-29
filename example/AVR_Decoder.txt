@@ -80,8 +80,8 @@ state record.
 {H#include "Exception.h"
 {H
 {H//
-{H//	Enumerate the various AVR CPUs we shall (try)
-{H//	to simulate.
+{H//	Enumerate the various AVR CPUs we shall (try to)
+{H//	simulate.
 {H//
 {Htypedef enum {
 {H	//
@@ -241,8 +241,11 @@ state record.
 {H		//	to make and split 16 bit values.
 {H		//
 {H		static inline byte high( word v ) { return(( v >> 8 ) & 0xFF ); \}
+{H		static inline word highw( dword v ) { return(( v >> 16 ) & 0xFFFF ); \}
 {H		static inline byte low( word v ) { return( v & 0xFF ); \}
+{H		static inline word loww( dword v ) { return( v & 0xFFFF ); \}
 {H		static inline word combine( byte h, byte l ) { return( ((word)h << 8 ) | ((word)l )); \}
+{H		static inline dword combinew( word h, word l ) { return( ((dword)h << 16 ) | ((dword)l )); \}
 {H		//
 {H		//	Simplified access to the stack pointer.
 {H		//
@@ -288,29 +291,28 @@ state record.
 {H		//	Specific PC push and pop routines (as the size of the
 {H		//	program counter varies) and a direct set PC function.
 {H		//
-{H		void push_pc( word h, word l ) {
+{H		//	Push also assigns a new value to the PC (as per call).
+{H		//
+{H		void push_pc( dword adrs ) {
 {H			if( _pas_bytes ) {
 {H				case 1: {
 {H					push_byte( low( _pc ));
-{H					_pc = low( l ) & _pc_mask;
 {H					break;
 {H				\}
 {H				case 2: {
 {H					push_word( _pc );
-{H					_pc = l & _pc_mask;
 {H					break;
 {H				\}
 {H				case 3: {
-{H					push_byte( low( _pc >> 16 ));
-{H					push_word( _pc );
-{H					_pc = ((dword)h << 16 ) | l;
-{H					_pc &= _pc_mask;
+{H					push_byte( low( highw( _pc )));
+{H					push_word( loww( _pc ));
 {H					break;
 {H				\}
 {H				default: {
 {H					error->raise( Invalid_PAS );
 {H				\}
 {H			\}
+{H			_pc = adrs & _pc_mask;
 {H		\}
 {H		void pop_pc( void ) {
 {H			switch( _pas_bytes ) {
@@ -369,8 +371,9 @@ state record.
 {H
 {H		//
 {H		//	Peek ahead into the program with an offset from the PC
+{H		//	Only accepts positive offsets ahead of the PC.
 {H		//
-{H		word peek_next( word offset ) {
+{H		word peek_ahead( word offset ) {
 {H			//
 {H			//	Simples..
 {H			//
@@ -506,42 +509,215 @@ state record.
 {H		\}
 {H\};
 {H
+{H//
+{H//	Define a virtual class to be used to handle
+{H//	the methods that implement an instruction.
+{H//
+{Hclass Instruction {
+{H	private:
+
+		The following definitions are made available to the implementation file
+		to simplify the definition of the individual instructions actions.
+
+{H		//
+{H		//	Sign extension routine.
+{H		//
+{H		template<class t, word n> inline t sign_extend( t value ) {
+{H			const t sign_bit = ((t)1)<<(n-1);
+{H			const t sign_fill = ~((sign_bit<<1)-1);
+{H			if( value & sign_bit ) value |= sign_fill;
+{H			return( value );
+{H		\}
+{H 
+
+{H		//
+{H		//	4 bit oriented.
+{H		//
+{H		static inline byte nibble( byte v ) {
+{H			return( v & 0x0F );
+{H		\}
+{H		static inline bool half( byte a, byte b, byte c ) {
+{H			return(( nibble( a ) + nibble( b ) + c ) > 9 );
+{H		\}
+
+{H		//
+{H		//	8 bit oriented
+{H		//
+{H		static inline bool odd( byte v ) {
+{H			return( v & 0x01 );
+{H		\}
+{H		static inline bool sign( byte v ) {
+{H			return( v & 0x80 );
+{H		\}
+
+{H		//
+{H		//	16 bit oriented.
+{H		//
+{H		static inline bool sign( word v ) {
+{H			return( v & 0x8000 );
+{H		\}
+{H		static inline byte msb( word v ) {
+{H			return( v >> 8 );
+{H		\}
+{H		static inline word combine( byte h, byte l ) {
+{H			return(( (word)h << 8 ) | (word)l );
+{H		\}
+
+{H		//
+{H		//	32 bit oriented.
+{H		//
+{H		static inline word msw( dword v ) {
+{H			return( v >> 16);
+{H		\}
+{H		static inline dword( word h, word l ) {
+{H			return(( (dword)h << 16 ) | (dword)l );
+{H		\}
+
+{H		//
+{H		//	Provide a set of routines for breaking down op codes
+{H		//	into their component parts.
+{H		//
+{H		//	Bit assignments: 
+{H		//
+{H		//	rrrrr	= Source register (R0-R31)
+{H		//	ddddd	= Destination register (R0-R31)
+{H		//
+{H		//		____ __r_ ____ rrrr
+{H		//		____ ___d dddd ____
+{H		//
+{H		static inline word arg_r0_r31( word op ) { return(( op & 0x000F )|(( op >> 5 ) & 0x0010 )); \}
+{H		static inline word arg_d0_d31( word op ) { return(( op >> 4 ) & 0x001F ); \}
 {H
-{H//
-{H//	Define a type to be used to handle the
-{H//	pointers to functions that implement
-{H//	an instruction.
-{H//
-{H//	The function itself takes the opcode
-{H//	identified, a pointer to the AVR state
-{H//	and returns the number of cycles that
-{H//	the instruction takes.
-{H//
-{Htypedef word (*function_code)( word opcode, AVR_State *state );
+{H		//
+{H		//	rrrr	= Source register (R16–R31)
+{H		//	dddd	= Destination register (R16–R31)
+{H		//
+{H		//		____ ____ ____ rrrr
+{H		//		____ ____ dddd ____
+{H		//
+{H		static inline word arg_r16_r31( word op ) { return(( op & 0x000F ) + 16 ); \}
+{H		static inline word arg_d16_d31( word op ) { return((( op >> 4 ) & 0x000F ) + 16 ); \}
+{H		//
+{H		//		____ ____ ____ _rrr
+{H		//		____ ____ _ddd ____
+{H		//
+{H		//	rrr	= Source register (R16–R23)
+{H		//	ddd	= Destination register (R16–R23)
+{H		//
+{H		static inline word arg_r16_r23( word op ) { return(( op & 0x0007 ) + 16 ); \}
+{H		static inline word arg_d16_d23( word op ) { return((( op >> 4 ) & 0x0007 ) + 16 ); \}
 {H
-{H//
-{H//	Define a type to be used to handle the
-{H//	pointers to function which disassemble
-{H//	an instruction.  Returns number of word
-{H//	instruction uses.
-{H//
-{Htypedef word (*disassembler)( word opcode, AVR_State *state, char *buffer, int max );
+{H		//
+{H		//	RRRR	= Source register pair (R1:R0–R31:R30)
+{H		//	DDDD	= Destination register pair (R1:R0–R31:R30)
+{H		//
+{H		//		____ ____ DDDD ____
+{H		//		____ ____ ____ RRRR
+{H		//
+{H		//	Routines below return even numbers 0 through 30 (16 distinct values)
+{H		//
+{H		static inline word arg_r1r0_r31r30( word op ) { return(( op & 0x000F ) << 1 ); \}
+{H		static inline word arg_d1d0_d31d30( word op ) { return(( op >> 3 ) & 0x001E ); \}
 {H
-{H//
-{H//	Declare the data structure which the instruction
-{H//	lookup routine returns the address of.
-{H//
-{Htypedef struct {
-{H	function_code		*execute;
-{H	disassembler		*display;
-{H\} instruction;
+{H		//
+{H		//	dd	= Register pair W, X, Y or Z (R25:R24, R27:R26, R29:R28, R31:R30)
+{H		//
+{H		//		____ ____ __dd ____
+{H		//
+{H		//		Routine below returns even numbers 24 through 30 (4 distinct values)
+{H		//
+{H		static inline word arg_d24d25_d30d31( word op ) { return((( op >> 3 ) & 0x0006 ) + 24 ); \}
+{H		static inline char arg_WXYZ( word op ) { return( 'W' + (( op >> 4 ) & 0x0003 )); \}
+{H
+{H		//
+{H		//	aaaaaa	= I/O space address
+{H		//	aaaaa	= I/O space address (first 32 only)
+{H		//
+{H		//		____ _aa_ ____ aaaa
+{H		//		____ ____ aaaa a___
+{H		//
+{H		static inline word arg_a0_a63( word op ) { return(( op & 0x00F )|(( op >> 5 ) & 0x0030 )); \}
+{H		static inline word arg_a0_a31( word op ) { return(( op >> 3 ) & 0x001F ); \}
+{H
+{H		//
+{H		//	bbb	= Bit number (0–7)
+{H		//	sss	= Flag in SREG
+{H		//
+{H		//		____ ____ ____ _bbb
+{H		//		____ ____ _sss ____
+{H		//
+{H		//	Also provide flag index back to letter routine.
+{H		//
+{H		static inline word arg_bit( word op ) { return( op & 0x0007 ); \}
+{H		static inline word arg_bit_mask( word op ) { return((word)1 << ( op & 0x0007 )); \}
+{H		static inline word arg_flag( word op ) { return(( op >> 4 ) & 0x0007 ); \}
+{H		static inline word arg_flag_mask( word op ) { return((word)1 << (( op >> 4 ) & 0x0007 )); \}
+{H		static inline char disp_flag( word flag ) {
+{H			static const char flags[ 8 ] = { 'C', 'Z', 'N', 'V', 'S', 'H', 'T', 'I' \};
+{H			if( word > 7 ) return( '?' );
+{H			return( flags[ flag ]);
+{H		\}
+{H
+{H		//
+{H		//	kkkk		= 4-bit unsigned constant (DES opcode)
+{H		//	KKKKKK		= 6-bit unsigned constant (adiw/sbiw word constant)
+{H		//	kkkkkk		= 6-bit unsigned constant (YZ offset)
+{H		//	KKKKKKKK	= 8-bit (un)signed constant (sign not meaningful in this context)
+{H		//	kkkkkkkkkkkk	= 12 bit signed constant (relative calls/jumps)
+{H		//
+{H		//		____ ____ kkkk ____	4
+{H		//		____ ____ KK__ KKKK	6_w (adiw/sbiw)
+{H		//		__k_ kk__ ____ _kkk	6_o (YZ offset)
+{H		//		____ KKKK ____ KKKK	8
+{H		//		____ kkkk kkkk kkkk	12
+{H		//
+{H		static word arg_imm4( word op ) { return(( op >> 4 ) & 0x000F ); \}
+{H		static word arg_imm6_w( word op ) { return(( op & 0x000F )|(( op >> 2 ) & 0x0030 )); \}
+{H		static word arg_imm6_o( word op ) { return(( op & 0x0007 )|(( op >> 7 ) & 0x0018 )|(( op >> 8 ) & 0x0020 )); \}
+{H		static word arg_imm8( word op ) { return(( op & 0x000F )|(( op >> 4 ) & 0x00F0 )); \}
+{H
+{H		//
+{H		//	jjjjjj +16	= 6-bit and 16-bit unsigned constant (absolute PC)
+{H		//	jjjjjjj		= 7-bit signed constant (relative branching)
+{H		//	jjjjjjjjjjjj	= 12-bit signed constant (relative PC)
+{H		//	
+{H		//		____ ___j jjjj ___j	6 then 16 following.
+{H		//		____ __jj jjjj j___	7
+{H		//		____ jjjj jjjj jjjj	12
+{H		//
+{H		static dword arg_absolute( word op, word arg ) { return( COMBINEW((( op & 0x0001 ) | (( op >> 3 ) & 0x003E )), arg )); \}
+{H		static dword arg_branch( word op ) { return( sign_extend<dword,7>(( op >> 3 ) & 0x7F )); \}
+{H		static dword arg_relative( word op ) { return( sign_extend<dword,12>( op & 0x0FFF ); \}
+{H
+{H		//
+{H		//	Routine returns number of bits set in a byte value.  Rather than
+{H		//	a 256 element table, we will use a 16 element table, twice.
+{H		//
+{H		static byte ones( byte value ) {
+{H			static byte counted[ 16 ] = {	0, 1, 1, 2,	// 0000 0001 0010 0011
+{H							1, 2, 2, 3,	// 0100 0101 0110 0111
+{H							1, 2, 2, 3,	// 1000 1001 1010 1011
+{H							2, 3, 3, 4	// 1100 1101 1110 1111
+{H			};
+{H			return( counted[ 
+{H		\}
+{H	public:
+{H		//
+{H		//	Execute an instruction against an AVR state.
+{H		//
+{H		virtual word execute( word opcode, AVR_State *state ) = 0;
+{H		//
+{H		//	Fill an buffer with the mnemonic of the instruction.
+{H		//
+{H		virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) = 0;
+{H\};
 {H
 {H
 {H//
 {H//	Declare the look up function as defined at the end of
 {H//	the source file.
 {H//
-{Hextern instruction *find_instruction( word opcode );
+{Hextern Instruction *find_instruction( word opcode );
 {H
 {H#endif
 {H
@@ -580,7 +756,7 @@ The start of the file:
 { typedef struct {
 { 	word		mask,		// Which bit do we test (no word index required).
 { 			jump;		// How many to jump if bit is 1.
-{ 	instruction	*data;		// The data structure to return address of.
+{ 	Instruction	*data;		// The data structure to return address of.
 { \} decoder_entry;
 {
 
@@ -590,13 +766,13 @@ The end of the file:
 {_//
 {_//	The lookup function.
 {_//
-{_instruction *find_instruction( word opcode ) {
+{_Instruction *find_instruction( word opcode ) {
 {_	decoder_entry	*ptr;
 {_	word		test;
 {_
 {_	ptr = decode_table;
 {_	while(( test = ptr->mask )) ptr += ( opcode & test )? ptr->jump: 1;
-{_	return( ptr->code );
+{_	return( ptr->data );
 {_\}
 {_
 {_//
@@ -608,219 +784,32 @@ AVR Instruction Table
 =====================
 
 
-The following definitions are made available to the implementation file
-to simplify the definition of the individual instructions actions.
-
-{ 
-{ //
-{ //	Sign extension routine.
-{ //
-{ template<class t, word n> inline t sign_extend( t value ) {
-{ 	const t sign_bit = ((t)1)<<(n-1);
-{	const t sign_fill = ~((sign_bit<<1)-1);
-{ 	if( value & sign_bit ) value |= sign_fill;
-{ 	return( value );
-{ \}
-{ 
-{ //
-{ //	4 bit oriented.
-{ //
-{ #define NIBBLE(v)	((v)&0x0F)
-{ #define HALF(a,b,c)	((NIBBLE(a)+NIBBLE(b)+(c))>9)
-{ //
-{ //	8 bit oriented
-{ //
-{ #define BYTE(v)	((v)&0xFF)
-{ #define LSBIT(v)	((v)&0x01)
-{ #define MSBIT(v)	((v)&0x80)
-{ #define SIGN(v)	(MSBIT(v)!=0)
-{ //
-{ //	16 bit oriented.
-{ //
-{ #define SIGNW(v)	(((v)&0x8000)!=0)
-{ #define LSBYTE(v)	((v)&0xFF)
-{ #define MSBYTE(v)	(((v)>>8)&0xFF)
-{ #define COMBINE(h,l)	((((word)(h))<<8)|(l))
-{ //
-{ //	32 bit oriented.
-{ //
-{ #define MSWORD(v)	((word)(((v)>>16)&0xFFFF))
-{ #define LSWORD(v)	((word)((v)&0xFFFF))
-{ #define COMBINEW(h,l)	((((dword)(h))<<16)|(l))
-{
-
-The information tabulated below forms the list of arguments which are encoded
-in the opcodes of AVR instructions.
-
-Opcode argument bits: 
-
-	rrrrr	= Source register (R0-R31)
-	ddddd	= Destination register (R0-R31)
-	
-	rrrr	= Source register (R16–R31)
-	dddd	= Destination register (R16–R31)
-	
-	rrr	= Source register (R16–R23)
-	ddd	= Destination register (R16–R23)
-	
-	RRRR	= Source register pair (R1:R0–R31:R30)
-	DDDD	= Destination register pair (R1:R0–R31:R30)
-	
-	dd	= Register pair W, X, Y or Z (R25:R24, R27:R26, R29:R28, R31:R30)
-	
-	aaaaaa	= I/O space address
-	aaaaa	= I/O space address (first 32 only)
-	
-	bbb	= Bit number (0–7)
-	sss	= Flag in SREG (bit number 0-7)
-	
-	kkkk	= 4-bit unsigned constant (DES opcode)
-	kkkkkk	= 6-bit unsigned constant
-	KKKKKKKK= 8-bit constant
-
-	jjjjjjj	= 7-bit signed constant (relative branching)
-{
-{ //
-{ //	Provide a set of routines for breaking down op codes
-{ //	into their component parts.
-{ //
-{ //	Bit assignments: 
-{ //
-{ //	rrrrr	= Source register (R0-R31)
-{ //	ddddd	= Destination register (R0-R31)
-{ //
-{ //		____ __r_ ____ rrrr
-{ //		____ ___d dddd ____
-{ //
-{ static inline word arg_r0_r31( word op ) { return(( op & 0x000F )|(( op >> 5 ) & 0x0010 )); \}
-{ static inline word arg_d0_d31( word op ) { return(( op >> 4 ) & 0x001F ); \}
-{
-{ //
-{ //	rrrr	= Source register (R16–R31)
-{ //	dddd	= Destination register (R16–R31)
-{ //
-{ //		____ ____ ____ rrrr
-{ //		____ ____ dddd ____
-{ //
-{ static inline word arg_r16_r31( word op ) { return(( op & 0x000F ) + 16 ); \}
-{ static inline word arg_d16_d31( word op ) { return((( op >> 4 ) & 0x000F ) + 16 ); \}
-{ //
-{ //		____ ____ ____ _rrr
-{ //		____ ____ _ddd ____
-{ //
-{ //	rrr	= Source register (R16–R23)
-{ //	ddd	= Destination register (R16–R23)
-{ //
-{ static inline word arg_r16_r23( word op ) { return(( op & 0x0007 ) + 16 ); \}
-{ static inline word arg_d16_d23( word op ) { return((( op >> 4 ) & 0x0007 ) + 16 ); \}
-{
-{ //
-{ //	RRRR	= Source register pair (R1:R0–R31:R30)
-{ //	DDDD	= Destination register pair (R1:R0–R31:R30)
-{ //
-{ //		____ ____ DDDD ____
-{ //		____ ____ ____ RRRR
-{ //
-{ //	Routines below return even numbers 0 through 30 (16 distinct values)
-{ //
-{ static inline word arg_r1r0_r31r30( word op ) { return(( op & 0x000F ) << 1 ); \}
-{ static inline word arg_d1d0_d31d30( word op ) { return(( op >> 3 ) & 0x001E ); \}
-{
-{ //
-{ //	dd	= Register pair W, X, Y or Z (R25:R24, R27:R26, R29:R28, R31:R30)
-{ //
-{ //		____ ____ __dd ____
-{ //
-{ //		Routine below returns even numbers 24 through 30 (4 distinct values)
-{ //
-{ static inline word arg_d24d25_d30d31( word op ) { return((( op >> 3 ) & 0x0006 ) + 24 ); \}
-{ static inline char arg_WXYZ( word op ) { return( 'W' + (( op >> 4 ) & 0x0003 )); \}
-{
-{ //
-{ //	aaaaaa	= I/O space address
-{ //	aaaaa	= I/O space address (first 32 only)
-{ //
-{ //		____ _aa_ ____ aaaa
-{ //		____ ____ aaaa a___
-{ //
-{ static inline word arg_a0_a63( word op ) { return(( op & 0x00F )|(( op >> 5 ) & 0x0030 )); \}
-{ static inline word arg_a0_a31( word op ) { return(( op >> 3 ) & 0x001F ); \}
-{
-{ //
-{ //	bbb	= Bit number (0–7)
-{ //	sss	= Flag in SREG
-{ //
-{ //		____ ____ ____ _bbb
-{ //		____ ____ _sss ____
-{ //
-{ //	Also provide flag index back to letter routine.
-{ //
-{ static inline word arg_bit( word op ) { return( op & 0x0007 ); \}
-{ static inline word arg_bit_mask( word op ) { return((word)1 << ( op & 0x0007 )); \}
-{ static inline word arg_flag( word op ) { return(( op >> 4 ) & 0x0007 ); \}
-{ static inline word arg_flag_mask( word op ) { return((word)1 << (( op >> 4 ) & 0x0007 )); \}
-{ static inline char disp_flag( word flag ) {
-{ 	static const char flags[ 8 ] = { 'C', 'Z', 'N', 'V', 'S', 'H', 'T', 'I' \};
-{	if( word > 7 ) return( '?' );
-{	return( flags[ flag ]);
-{ \}
-{
-{ //
-{ //	kkkk		= 4-bit unsigned constant (DES opcode)
-{ //	KKKKKK		= 6-bit unsigned constant (adiw/sbiw word constant)
-{ //	kkkkkk		= 6-bit unsigned constant (YZ offset)
-{ //	KKKKKKKK	= 8-bit (un)signed constant (sign not meaningful in this context)
-{ //	kkkkkkkkkkkk	= 12 bit signed constant (relative calls/jumps)
-{ //
-{ //		____ ____ kkkk ____	4
-{ //		____ ____ KK__ KKKK	6_w (adiw/sbiw)
-{ //		__k_ kk__ ____ _kkk	6_o (YZ offset)
-{ //		____ KKKK ____ KKKK	8
-{ //		____ kkkk kkkk kkkk	12
-{ //
-{ static word arg_imm4( word op ) { return(( op >> 4 ) & 0x000F ); \}
-{ static word arg_imm6_w( word op ) { return(( op & 0x000F )|(( op >> 2 ) & 0x0030 )); \}
-{ static word arg_imm6_o( word op ) { return(( op & 0x0007 )|(( op >> 7 ) & 0x0018 )|(( op >> 8 ) & 0x0020 )); \}
-{ static word arg_imm8( word op ) { return(( op & 0x000F )|(( op >> 4 ) & 0x00F0 )); \}
-{
-{ //
-{ //	jjjjjj +16	= 6-bit and 16-bit unsigned constant (absolute PC)
-{ //	jjjjjjj		= 7-bit signed constant (relative branching)
-{ //	jjjjjjjjjjjj	= 12-bit signed constant (relative PC)
-{ //	
-{ //		____ ___j jjjj ___j	6 then 16 following.
-{ //		____ __jj jjjj j___	7
-{ //		____ jjjj jjjj jjjj	12
-{ //
-{ static dword arg_absolute( word op, word arg ) { return( COMBINEW((( op & 0x0001 ) | (( op >> 3 ) & 0x003E )), arg )); \}
-{ static dword arg_branch( word op ) { return( sign_extend<dword,7>(( op >> 3 ) & 0x7F )); \}
-{ static dword arg_relative( word op ) { return( sign_extend<dword,12>( op & 0x0FFF ); \}
-{
-{ //	kkkkkk kkkkkkkkkkkkkkkk = 22 bit absolute program address
-{ //
-{ static dword arg_int22( word op, word arg ) {
-{	WRITE CODE HERE
-{ \}
 
 Define the specific details that the decoder encoder needs to know:
 
 {Z 16					}
 {W 1					}
-{T decoder_entry			}
 {S static				}
+{T decoder_entry			}
 {N decode_table				}
 
-The output table will point to a data structure ('instruction') which
-contains pointers to routines that enact the various aspects of the
-identified instruction.
+The output table will point to an instance of class Instruction which
+contains methods that enact the various aspects of the identified instruction.
 
-{F &( inst_% )				}
+The individual instruction pointers are processed according to the following
+'F' record meaning that an instruction 'adc' will be inserted into the lookup
+table as '&( adc_inst )'.
+
+{F &( %_inst )				}
+
+Define the 'illegal' instruction implementation.
+
 {E illegal				}
 
-Define the 'illegal' instruction implementation.  Here is as good as anywhere.
+{ class : public Instruction {
+{ public:
 
-	{ 
-	{ static word op_illegal( word opcode, AVR_State *state ) {
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	Called when any decoded opcode does not uniquely identify a
 	{ 	//	single specific instruction.
@@ -865,16 +854,47 @@ Define the 'illegal' instruction implementation.  Here is as good as anywhere.
 	{ 	return( 1 );
 	{ \}
 
-	{ static word dis_illegal( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
 	{ 	snprintf( buffer, max, "illegal %04X", opcode );
 	{ 	return( 1 );
 	{ \}
 
-{ static instruction inst_illegal = { op_illegal, dis_illegal \};
+{ \} illegal_inst;
 
-The remainder of this document captures each of the instructions, in alphabetical
-order.  The interpretation of the instructions encoding and actions is taken from
-the PDF document referenced at the start (AVR-Instruction-Set-Manual-DS40002198A).
+The remainder of this document captures each of the instructions, in the order of
+the instructions encoding and actions is taken from the PDF document referenced
+at the start (AVR-Instruction-Set-Manual-DS40002198A).
+
+The details below summarise the arguments which are encoded into the opcodes of
+AVR instructions.
+
+	Opcode argument bits: 
+
+		rrrrr	= Source register (R0-R31)
+		ddddd	= Destination register (R0-R31)
+		
+		rrrr	= Source register (R16–R31)
+		dddd	= Destination register (R16–R31)
+		
+		rrr	= Source register (R16–R23)
+		ddd	= Destination register (R16–R23)
+		
+		RRRR	= Source register pair (R1:R0–R31:R30)
+		DDDD	= Destination register pair (R1:R0–R31:R30)
+		
+		dd	= Register pair W, X, Y or Z (R25:R24, R27:R26, R29:R28, R31:R30)
+		
+		aaaaaa	= I/O space address
+		aaaaa	= I/O space address (first 32 only)
+		
+		bbb	= Bit number (0–7)
+		sss	= Flag in SREG (bit number 0-7)
+		
+		kkkk	= 4-bit unsigned constant (DES opcode)
+		kkkkkk	= 6-bit unsigned constant
+		KKKKKKKK= 8-bit constant
+
+		jjjjjjj	= 7-bit signed constant (relative branching)
 
 The section numbers provided with the instruction title reference directly back to
 this document.
@@ -887,7 +907,9 @@ this document.
 { //	
 {I 000111rdddddrrrr adc			}
 
-	{ static word op_adc( word opcode, AVR_State *state ) {
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	0001 11rd dddd rrrr
 	{ 	//
@@ -910,12 +932,12 @@ this document.
 	{ 	return( 1 );
 	{ \}
 
-	{ static word dis_adc( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
 	{ 	snprintf( buffer, max, "adc r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
 	{ 	return( 1 );
 	{ \}
 
-{ static instruction inst_adc = { op_adc, dis_adc \}; 
+{ \} adc_inst; 
 
 
 5.2. ADD – Add without Carry
@@ -925,7 +947,9 @@ this document.
 { //
 {I 000011rdddddrrrr add			}
 
-	{ static word op_add( word opcode, AVR_State *state ) {
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	0000 11rd dddd rrrr
 	{ 	//
@@ -947,12 +971,12 @@ this document.
 	{ 	return( 1 );
 	{ \}
 
-	{ static word dis_add( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
 	{ 	snprintf( buffer, max, "add r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
 	{ 	return( 1 );
 	{ \}
 
-{ static instruction inst_add = { op_add, dis_add \};
+{ \} add_inst;
 
 
 5.3. ADIW – Add Immediate to Word
@@ -972,7 +996,9 @@ Note:
 		
 {I 10010110KKddKKKK adiw		}
 
-	{ static word op_adiw( word opcode, AVR_State *state ) {
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	1001 0110 KKdd KKKK
 	{ 	//
@@ -998,12 +1024,12 @@ Note:
 	{ 	return( clocks );
 	{ \}
 
-	{ static word dis_adiw( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
 	{ 	snprintf( buffer, max, "adiw %c,0x%02X", arg_WXYZ( opcode ), (int)arg_imm6_w( opcode ));
 	{ 	return( 1 );
 	{ \}
 
-{ static instruction inst_adiw = { op_adiw, dis_adiw \};
+{ \} adiw_inst;
 
 
 5.4 AND – Logical AND
@@ -1013,7 +1039,9 @@ Note:
 { //
 {I 001000rdddddrrrr and			}
 
-	{ static word op_and( word opcode, AVR_State *state ) {
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	0010 00rd dddd rrrr
 	{ 	//
@@ -1033,12 +1061,12 @@ Note:
 	{ 	return( 1 );
 	{ \}
 
-	{ static word dis_and( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
 	{ 	snprintf( buffer, max, "and r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
 	{ 	return( 1 );
 	{ \}
 
-{ static instruction inst_and = { op_and, dis_and \};
+{ \} and_inst;
 
 
 5.5 ANDI – Logical AND with Immediate
@@ -1048,7 +1076,9 @@ Note:
 { //
 {I 0111KKKKddddKKKK andi		}
 
-	{ static word op_andi( word opcode, AVR_State *state ) {
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	0111 KKKK dddd KKKK
 	{ 	//
@@ -1064,12 +1094,18 @@ Note:
 	{ 	return( 1 );
 	{ \}
 
-	{ static word dis_andi( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
+
+		Note this instruction is aliased against 'Clear bits in Register' (CBR Rd,K)
+		which is an alias for ANDI Rd,~K.  The disassembly routine will note this and
+		display the appropriate version based on the number of bits set in the constant
+		argument supplied.
+
 	{ 	snprintf( buffer, max, "andi r%d,0x%02X", (int)arg_d0_d31( opcode ), (int)arg_imm8( opcode ));
 	{ 	return( 1 );
 	{ \}
 
-{ static instruction inst_andi = { op_andi, dis_andi \};
+{ \} andi_inst;
 
 
 5.6 ASR – Arithmetic Shift Right
@@ -1079,7 +1115,9 @@ Note:
 { //
 {I 1001010ddddd0101 asr			}
 
-	{ static word op_asr( word opcode, AVR_State *state ) {
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	1001 010d dddd 0101
 	{ 	//
@@ -1098,12 +1136,12 @@ Note:
 	{ 	return( 1 );
 	{ \}
 
-	{ static word dis_asr( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
 	{ 	snprintf( buffer, max, "asr r%d", (int)arg_d0_d31( opcode ));
 	{ 	return( 1 );
 	{ \}
 
-{ static instruction inst_asr = { op_asr, dis_asr \};
+{ \} asr_inst;
 
 
 5.7 BCLR – Bit Clear in SREG
@@ -1113,7 +1151,9 @@ Note:
 { //
 {I 100101001sss1000 bclr			}
 
-	{ static word op_bclr( word opcode, AVR_State *state ) {
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	1001 0100 1sss 1000
 	{ 	//
@@ -1121,13 +1161,13 @@ Note:
 	{ 	return( 1 );
 	{ \}
 
-	{ static word dis_bclr( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
 	{	int f = arg_flag( opcode );
 	{ 	snprintf( buffer, max, "bclr %d(%c)", f, disp_flag( f ));
 	{ 	return( 1 );
 	{ \}
 
-{ static instruction inst_bclr = { op_bclr, dis_bclr \};
+{ \} bclr_inst;
 
 
 5.8 BLD – Bit Load from the T Bit in SREG to a Bit in Register
@@ -1137,7 +1177,9 @@ Note:
 { //
 {I 1111100ddddd0bbb bld			}
 
-	{ static word op_bld( word opcode, AVR_State *state ) {
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	1111 100d dddd 0bbb
 	{ 	//
@@ -1154,12 +1196,12 @@ Note:
 	{ 	return( 1 );
 	{ \}
 
-	{ static word dis_bld( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
 	{ 	snprintf( buffer, max, "bld r%d,%d", arg_d0_d31( opcode ), arg_bit( opcode ));
 	{ 	return( 1 );
 	{ \}
 
-{ static instruction inst_bld = { op_bld, dis_bld \};
+{ \} bld_inst;
 
 
 5.9 BRBC – Branch if Bit in SREG is Cleared
@@ -1169,7 +1211,9 @@ Note:
 { //
 {I 111101jjjjjjjbbb brbc		}
 
-	{ static word op_brbc( word opcode, AVR_State *state ) {
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	1111 01jj jjjj jbbb
 	{ 	//
@@ -1180,13 +1224,13 @@ Note:
 	{ 	return( 1 );
 	{ \}
 
-	{ static word dis_brbc( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
 	{	int f = arg_bit( opcode );
 	{ 	snprintf( buffer, max, "brbc %d(%c),%d", f, disp_flag( f ), (int)arg_branch( opcode ));
 	{ 	return( 1 );
 	{ \}
 
-{ static instruction inst_brbc = { op_brbc, dis_brbc \};
+{ \} brbc_inst;
 
 
 5.10 BRBS – Branch if Bit in SREG is Set
@@ -1196,7 +1240,9 @@ Note:
 { //
 {I 111100jjjjjjjbbb brbs		}
 
-	{ static word op_brbs( word opcode, AVR_State *state ) {
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	1111 01jj jjjj jbbb
 	{ 	//
@@ -1207,13 +1253,13 @@ Note:
 	{ 	return( 1 );
 	{ \}
 
-	{ static word dis_brbs( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
 	{	int f = arg_bit( opcode );
 	{ 	snprintf( buffer, max, "brbs %d(%c),%d", f, disp_flag( f ), (int)arg_branch( opcode ));
 	{ 	return( 1 );
 	{ \}
 
-{ static instruction inst_brbs = { op_brbs, dis_brbs \};
+{ \} brbs_inst;
 
 
 5.11 BRCC – Branch if Carry Cleared
@@ -1235,7 +1281,9 @@ Note:
 { //	
 {I 1001010110011000 break		}
 
-	{ static word op_break( word opcode, AVR_State *state ) {
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	1001 0101 1001 1000
 	{ 	//
@@ -1247,12 +1295,12 @@ Note:
 	{ 	return( clocks );
 	{ \}
 
-	{ static word dis_break( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
 	{ 	snprintf( buffer, max, "break" );
 	{ 	return( 1 );
 	{ \}
 
-{ static instruction inst_break = { op_break, dis_break \};
+{ \} break_inst;
 
 
 5.14 BREQ – Branch if Equal
@@ -1358,7 +1406,9 @@ Note:
 { //
 {I 100101000sss1000 bset		}
 
-	{ static word op_bset( word opcode, AVR_State *state ) {
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	1001 0100 0sss 1000
 	{ 	//
@@ -1366,13 +1416,13 @@ Note:
 	{ 	return( 1 );
 	{ \}
 
-	{ static word dis_bset( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
 	{	int f = arg_flag( opcode );
 	{ 	snprintf( buffer, max, "bset %d(%c)", f, disp_flag( f ));
 	{ 	return( 1 );
 	{ \}
 
-{ static instruction inst_bset = { op_bset, dis_bset \};
+{ \} bset_inst;
 
 
 5.31 BST – Bit Store from Bit in Register to T Bit in SREG
@@ -1382,7 +1432,9 @@ Note:
 { //
 {I 1111101ddddd0bbb bst			}
 
-	{ static word op_bst( word opcode, AVR_State *state ) {
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	1111 101d dddd 0bbb
 	{ 	//
@@ -1390,12 +1442,12 @@ Note:
 	{ 	return( 1 );
 	{ \}
 
-	{ static word dis_bst( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
 	{ 	snprintf( buffer, max, "bst r%d,%d", arg_d0_d31( opcode ), arg_bit( opcode ));
 	{ 	return( 1 );
 	{ \}
 
-{ static instruction inst_bst = { op_bst, dis_bst \};
+{ \} bst_inst;
 
 
 5.32 CALL – Long Call to a Subroutine
@@ -1405,7 +1457,9 @@ Note:
 { //
 {I 1001010jjjjj111j jjjjjjjjjjjjjjjj call }
 
-	{ static word op_call( word opcode, AVR_State *state ) {
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{	//
 	{	//	1001 010j jjjj 111j
 	{	//	jjjj jjjj jjjj jjjj
@@ -1413,8 +1467,7 @@ Note:
 	{ 	static byte ticks[ AVR_Types ] = { 4, 4, 4, 3, 3, 0 \};
 	{
 	{	word	clocks,
-	{		msword,
-	{		lsword;
+	{		arg;
 	{
 	{	if(( clocks = ticks[ state->_cpu ]) == 0 ) {
 	{		state->_error->raise( Unsupported_Instruction, state->_pc, opcode );
@@ -1422,18 +1475,28 @@ Note:
 	{	else {
 	{		if( state->_pas > 8 ) clocks++;
 	{	\}
-	{	state->push_pc( arg_absolute( opcode ), state->read_opcode());
+	{	state->push_pc( arg_absolute( opcode, state->next_opcode()));
 	{	return( clocks );
 	{ \}
+
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ 	snprintf( buffer, max, "call 0x%04X", arg_absolute( opcode, state->peek_ahead( 1 )));
+	{ 	return( 2 );
+	{ \}
+
+{ \} call_inst;
 
 
 5.33 CBI – Clear Bit in I/O Register
 ====================================
+{ //
+{ //	CBI a,b		IO(a)[b] = 0		(Clear bit b in IO register a)
+{ //
+{I 10011000aaaaabbb cbi			}
 
-	CBI a,b		IO(a)[b] = 0		(Clear bit b in IO register a)
-
-{I 10011000aaaaabbb cbi			} 
-	{ static word op_cbi( word opcode, AVR_State *state ) {
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{	//
 	{	//	1001 1000 aaaa abbb
 	{	//
@@ -1441,9 +1504,113 @@ Note:
 	{	byte	iv;
 	{
 	{	iv = state->_io->read( ir = arg_a0_a31( opcode ));
-	{	state->_io->write( ir, iv & ~( 1 << arg_bit( opcode )));
+	{	state->_io->write( ir, iv & ~arg_bit_mask( opcode ));
 	{ 	return( 0 );
 	{ \}
+
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ 	snprintf( buffer, max, "cbi %d,%d", arg_a0_a31( opcode ), arg_bit( opcode ));
+	{ 	return( 1 );
+	{ \}
+
+{ \} cbi_inst;
+
+
+5.34 CBR – Clear Bits in Register
+=================================
+
+	CBR Rd,K
+
+This is a alias for ANDI Rd,~K
+
+
+5.35 CLC – Clear Carry Flag
+===========================
+
+Note:	The "BCLR" instruction is the core version of the eight "CL?" instructions,
+	and therefore these do not require encoding individually.
+
+	"100101001sss1000 BCLR s" where sss is the SREG bit number to clear.
+
+		1001010010001000 clc
+		1001010010011000 clz
+		1001010010101000 cln
+		1001010010111000 clv
+		1001010011001000 cls
+		1001010011011000 clh
+		1001010011101000 clt
+		1001010011111000 cli
+
+
+5.36 CLH – Clear Half Carry Flag
+================================
+
+See section 5.7 and 5.35 above.
+
+
+5.37 CLI – Clear Global Interrupt Enable Bit
+============================================
+
+See section 5.7 and 5.35 above.
+
+
+5.38 CLN – Clear Negative Flag
+==============================
+
+See section 5.7 and 5.35 above.
+
+
+5.39 CLR – Clear Register
+=========================
+
+This is an alias for EOR Rd,Rd.  See section 5.54.
+
+
+5.40 CLS – Clear Sign Flag
+==========================
+
+See section 5.7 and 5.35 above.
+
+
+5.41 CLT – Clear T Bit
+======================
+
+See section 5.7 and 5.35 above.
+
+
+5.42 CLV – Clear Overflow Flag
+==============================
+
+See section 5.7 and 5.35 above.
+
+
+5.43 CLZ – Clear Zero Flag
+==========================
+
+See section 5.7 and 5.35 above.
+
+
+5.44 COM – One’s Complement
+===========================
+{ //
+{ //	COM Rd		Rd = ~Rd		(Ones complement)
+{ //
+{I 1001010ddddd0000 com			}
+
+	{ static word op_com( word opcode, AVR_State *state ) {
+	{	//
+	{	//	1001 010d dddd 0000
+	{	//
+	{ 	return( 0 );
+	{ \}
+
+	{ static word dis_com( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ 	snprintf( buffer, max, "com r%d", arg_d0_d31( opcode ));
+	{ 	return( 1 );
+	{ \}
+
+{ static instruction inst_com = { op_com, dis_com \};
+
 
 
 
@@ -1733,20 +1900,6 @@ Note:
 	{ \}
 
 
-Note:	The "BCLR" instruction is a core version of the eight "CL?" instructions,
-	and therefore these do not require encoding individually.
-
-	"100101001sss1000 BCLR s" where sss is the SREG bit number to clear.
-
-		1001010010001000 clc
-		1001010010011000 clz
-		1001010010101000 cln
-		1001010010111000 clv
-		1001010011001000 cls
-		1001010011011000 clh
-		1001010011101000 clt
-		1001010011111000 cli
-
 Note:	The "BSET" instruction is a core version of the eight "SE?" instructions,
 	and therefore these do not require encoding individually.
 
@@ -1802,11 +1955,6 @@ Note:	The "BSET" instruction is a core version of the eight "SE?" instructions,
 	{ 	return( 0 );
 	{ \}
 
-
-{I 1001010ddddd0000 com			} COM Rd		Rd = ~Rd		(Ones complement)
-	{ static word op_com( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
 
 {I 1001010ddddd0001 neg			} NEG Rd		Rd = -Rd		(Twos complement)
 	{ static word op_neg( word opcode, AVR_State *state ) {
