@@ -264,6 +264,7 @@ NODE {
  */
 #define FINISH struct finish
 FINISH {
+	int	line;
 	char	*data;
 	FINISH	*next;
 };
@@ -345,6 +346,17 @@ static NODE		*tree = NULL;
  */
 static int		dropped = 0;
 
+/*
+ *	Enumeration with variable for tracking where the last line of output went
+ */
+static enum {
+	UNSPECIFIED_TARGET,
+	SOURCE_TARGET,
+	HEADER_TARGET
+} output_target = UNSPECIFIED_TARGET;
+
+
+
 /************************************************
  *						*
  *	IMPLEMENTATION ROUTINES			*
@@ -391,6 +403,7 @@ static bool process( int line, char *input, char *comment ) {
 			/*
 			 *	S nnn	Provide number of bits per word of instruction
 			 */
+			output_target = UNSPECIFIED_TARGET;
 			i = atoi( input );
 			if(( i <= 0 )||( i > ( sizeof( word ) << 3 ))) {
 				fprintf( stderr, "Line %d: Invalid word size %d.\n", line, i );
@@ -411,6 +424,7 @@ static bool process( int line, char *input, char *comment ) {
 			 *	W nnn	Provide maximum number of words required to
 			 *		identify an instruction.
 			 */
+			output_target = UNSPECIFIED_TARGET;
 			i = atoi( input );
 			if(( i <= 0 )||( i > MAX_CODES )) {
 				fprintf( stderr, "Line %d: Invalid number of words %d.\n", line, i );
@@ -430,6 +444,7 @@ static bool process( int line, char *input, char *comment ) {
 			/*
 			 *	F ffff[%ffff]
 			 */
+			output_target = UNSPECIFIED_TARGET;
 			if( output_formats >= MAX_FORMATS ) {
 				fprintf( stderr, "Line %d: Too many output formats specified (maximum is %d).\n", line, MAX_FORMATS );
 				return( FALSE );
@@ -473,6 +488,7 @@ static bool process( int line, char *input, char *comment ) {
 			/*
 			 *	L language
 			 */
+			output_target = UNSPECIFIED_TARGET;
 			if(( output_comment_a != NULL )||( output_comment_b != NULL )) {
 				fprintf( stderr, "Output comment already specified.\n" );
 				return( FALSE );
@@ -554,6 +570,7 @@ static bool process( int line, char *input, char *comment ) {
 			/*
 			 *	Strip spaces...
 			 */
+			output_target = UNSPECIFIED_TARGET;
 			p = input;
 			while( *p != EOS ) {
 				if( isvisible( *p )) {
@@ -584,6 +601,7 @@ static bool process( int line, char *input, char *comment ) {
 			/*
 			 *	Strip spaces...
 			 */
+			output_target = UNSPECIFIED_TARGET;
 			p = input;
 			while( *p != EOS ) {
 				if( isvisible( *p )) {
@@ -614,6 +632,7 @@ static bool process( int line, char *input, char *comment ) {
 			/*
 			 *	Strip spaces...
 			 */
+			output_target = UNSPECIFIED_TARGET;
 			p = input;
 			while( *p != EOS ) {
 				if( isvisible( *p )) {
@@ -644,6 +663,7 @@ static bool process( int line, char *input, char *comment ) {
 			/*
 			 *	Strip spaces...
 			 */
+			output_target = UNSPECIFIED_TARGET;
 			p = input;
 			while( *p != EOS ) {
 				if( isvisible( *p )) {
@@ -673,6 +693,10 @@ static bool process( int line, char *input, char *comment ) {
 			/*
 			 *	Pass through "as is".
 			 */
+			if( output_target != SOURCE_TARGET ) {
+				output_target = SOURCE_TARGET;
+				fprintf( output_source, "#line %d \"%s\"\n", line, output_base_name );
+			}
 			fprintf( output_source, "%s\n", input );
 			break;
 		}
@@ -682,6 +706,10 @@ static bool process( int line, char *input, char *comment ) {
 			 *	record start symbol as the last
 			 *	character in a line.
 			 */
+			if( output_target != SOURCE_TARGET ) {
+				output_target = SOURCE_TARGET;
+				fprintf( output_source, "#line %d \"%s\"\n", line, output_base_name );
+			}
 			fprintf( output_source, "\n" );
 			break;
 		}
@@ -689,7 +717,10 @@ static bool process( int line, char *input, char *comment ) {
 			/*
 			 *	Add more data to the end of the file.
 			 */
+			output_target = UNSPECIFIED_TARGET;
+			output_target = UNSPECIFIED_TARGET;
 			FINISH *ptr = NEW( FINISH );
+			ptr->line = line;
 			ptr->data = DUP( input );
 			ptr->next = NULL;
 			*finish_data_tail = ptr;
@@ -700,6 +731,10 @@ static bool process( int line, char *input, char *comment ) {
 			/*
 			 *	Pass through "as is".
 			 */
+			if( output_target != HEADER_TARGET ) {
+				output_target = HEADER_TARGET;
+				fprintf( output_header, "#line %d \"%s\"\n", line, output_base_name );
+			}
 			fprintf( output_header, "%s\n", input );
 			break;
 		}
@@ -709,6 +744,7 @@ static bool process( int line, char *input, char *comment ) {
 			/*
 			 *	Start with new empty record, and link it in.
 			 */
+			output_target = UNSPECIFIED_TARGET;
 			p = NEW( INSTRUCTION );
 			p->line = line;
 			p->name = NULL;
@@ -817,6 +853,7 @@ static bool process( int line, char *input, char *comment ) {
 			break;
 		}
 		default: {
+			output_target = UNSPECIFIED_TARGET;
 			if( isvisible( record )) {
 				fprintf( stderr, "Invalid record identifier '%c'.\n", record );
 			}
@@ -1273,6 +1310,10 @@ int main( int argc, char *argv[]) {
 			return( 1 );
 		}
 	}
+
+	/*
+	 *	Default output targets to the console.
+	 */
 	output_source = stdout;
 	output_header = stdout;
 
@@ -1329,6 +1370,9 @@ int main( int argc, char *argv[]) {
 					fprintf( stderr, "Error in line %d.\n", line );
 					return( 1 );
 				}		
+			}
+			else {
+				output_target = UNSPECIFIED_TARGET;
 			}
 		}
 	}
@@ -1404,9 +1448,15 @@ int main( int argc, char *argv[]) {
 	}
 
 	/*
-	 * 	Output all of the finish data..
+	 * 	Output all of the finish data.. We will re-use the line variable
+	 *	for a similar purpose.
 	 */
+	line = 0;
 	while( finish_data ) {
+		if( finish_data->line > line ) {
+			fprintf( output_source, "#line %d \"%s\"\n", finish_data->line, output_base_name );
+			line = finish_data->line + 1;
+		}
 		fprintf( output_source, "%s\n", finish_data->data );
 		finish_data = finish_data->next;
 	}
