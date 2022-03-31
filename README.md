@@ -181,6 +181,9 @@ The following is taken for the source code as a more complete description of the
  *
  * 	BH	Used to indicate following lines belong in the header file.
  *
+ * 	BC	Used to indicate following lines are only comments and are
+ * 		to be skipped.
+ *
  * 	BF	Used to indicate the end of a block of lines.
  * 
  */
