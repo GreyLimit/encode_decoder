@@ -169,3 +169,28 @@ The following is taken for the source code as a more complete description of the
  */
 
 ```
+
+
+Thoughts, 31st March 2022
+
+This rough-n-ready program has reached a point where it seems to be useful,
+even helpful, when working in this specific target area.  The source code
+of the program itself is ... nothing to be proud of.  It is functional and
+probably contains a few issues if somebody were to push ity outside its
+comfort zone.
+
+My thoughts are that the original 'line by line' approach to the syntax
+of the file while simple to program and process enforces more complex
+textual gymnastics on the part of the programmer using it as an end tool.
+
+While the line oriented approach was good for the initial concept, and remains
+so for the majority of the 'commands' or 'records' it recognises.  There
+is an issue when dealing passing through blocks of source code for either
+the header file or source file.  It is just fiddly and the interleaved
+nature of the records renders some editing trick unavailable.
+
+So, to be added:  block style sections where a series of lines, unmodified,
+can be directed to one of the three target areas:  The header file, the top
+of the source file or the tail of the source file.
+
+Jeff.
