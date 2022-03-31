@@ -176,7 +176,7 @@ Thoughts, 31st March 2022
 This rough-n-ready program has reached a point where it seems to be useful,
 even helpful, when working in this specific target area.  The source code
 of the program itself is ... nothing to be proud of.  It is functional and
-probably contains a few issues if somebody were to push ity outside its
+probably contains a few issues if somebody were to push it outside its
 comfort zone.
 
 My thoughts are that the original 'line by line' approach to the syntax
