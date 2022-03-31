@@ -66,6 +66,11 @@ state record.
 {H#define _AVR_DECODER_H_
 {H
 {H//
+{H//	Include system definitions we need.
+{H//
+{H#include <cstdio>
+{H
+{H//
 {H//	Include the other definitions we need.
 {H//
 {H#include "Base.h"
@@ -294,7 +299,7 @@ state record.
 {H		//	Push also assigns a new value to the PC (as per call).
 {H		//
 {H		void push_pc( dword adrs ) {
-{H			if( _pas_bytes ) {
+{H			switch( _pas_bytes ) {
 {H				case 1: {
 {H					push_byte( low( _pc ));
 {H					break;
@@ -309,7 +314,7 @@ state record.
 {H					break;
 {H				\}
 {H				default: {
-{H					error->raise( Invalid_PAS );
+{H					_error->raise( Invalid_PAS );
 {H				\}
 {H			\}
 {H			_pc = adrs & _pc_mask;
@@ -331,7 +336,7 @@ state record.
 {H					break;
 {H				\}
 {H				default: {
-{H					error->raise( Invalid_PAS );
+{H					_error->raise( Invalid_PAS );
 {H				\}
 {H			\}
 {H		\}
@@ -490,20 +495,18 @@ state record.
 {H					//	1/ Reset the I flag.
 {H					//	2/ Clear the causal interrupt.
 {H					//	3/ Stack the program counter
-{H					//	4/ Set the program counter to the right vector
+{H					//	4/ Set the program counter to the right vector.
 {H					//
-{H					set_I( false );
-{H					_irqs->clear( irq );
-{H					push_pc();
-{H					//
-{H					//	Now set the PC to the address of the interrupt 'vector',
-{H					//	though this is (in my opinion not) actually a vector.
+{H					//	We set the PC to the address of the interrupt 'vector',
+{H					//	though this is not a vector (in my opinion).
 {H					//
 {H					//	At each IRQ target address are two words (before the next
 {H					//	IRQ target address) which is enough space for an absolute
 {H					//	jump or two single word instructions.
 {H					//
-{H					_pc = (word)irq << 1;
+{H					set_I( false );
+{H					_irqs->clear( irq );
+{H					push_pc( (dword)irq << 1 );
 {H				\}
 {H			\}
 {H		\}
@@ -514,7 +517,7 @@ state record.
 {H//	the methods that implement an instruction.
 {H//
 {Hclass Instruction {
-{H	private:
+{H	protected:
 
 		The following definitions are made available to the implementation file
 		to simplify the definition of the individual instructions actions.
@@ -522,7 +525,7 @@ state record.
 {H		//
 {H		//	Sign extension routine.
 {H		//
-{H		template<class t, word n> inline t sign_extend( t value ) {
+{H		template<class t, word n> static inline t sign_extend( t value ) {
 {H			const t sign_bit = ((t)1)<<(n-1);
 {H			const t sign_fill = ~((sign_bit<<1)-1);
 {H			if( value & sign_bit ) value |= sign_fill;
@@ -536,8 +539,24 @@ state record.
 {H		static inline byte nibble( byte v ) {
 {H			return( v & 0x0F );
 {H		\}
-{H		static inline bool half( byte a, byte b, byte c ) {
-{H			return(( nibble( a ) + nibble( b ) + c ) > 9 );
+
+		Half carry generated if the bottom nibbles added together
+		exceed the capacity of a single decimal digit (10 or above).
+
+		Used by code performing BCD maths to correct answers after
+		addition.  Is this still used anywhere?
+
+{H		static inline bool half( byte a, byte b ) {
+{H			return(( nibble( a ) + nibble( b )) > 9 );
+{H		\}
+
+		Borrow is generated when the bottom nibble of a is smaller
+		than the bottom nibble of b.  In a subtraction this would
+		cause a "borrowed" bit from the higher nibble to be carried
+		down.
+			
+{H		static inline bool borrow( byte a, byte b ) {
+{H			return( nibble( a ) < nibble( b ));
 {H		\}
 
 {H		//
@@ -550,11 +569,33 @@ state record.
 {H			return( v & 0x80 );
 {H		\}
 
+		Return indication of signed Overflow if b were added to a
+		resulting in c.
+
+{H		static inline bool overflow( byte a, byte b, byte c ) {
+{H			return(( sign( a ) == sign( b ))&&( sign( a ) != sign( c )));
+{H		\}
+
+		Return indication of signed Underflow if b were subtracted
+		from a resulting in c.  This is, in effect, the inverse of
+		signed overflow.
+
+{H		static inline bool underflow( byte a, byte b, byte c ) {
+{H			return( !overflow( a, b, c ));
+{H		\}
+
+{H		static inline bool carry( word v ) {
+{H			return( v & 0x0100 );
+{H		\}
+
 {H		//
 {H		//	16 bit oriented.
 {H		//
-{H		static inline bool sign( word v ) {
+{H		static inline bool signw( word v ) {
 {H			return( v & 0x8000 );
+{H		\}
+{H		static inline byte lsb( word v ) {
+{H			return( (byte)v );
 {H		\}
 {H		static inline byte msb( word v ) {
 {H			return( v >> 8 );
@@ -569,7 +610,7 @@ state record.
 {H		static inline word msw( dword v ) {
 {H			return( v >> 16);
 {H		\}
-{H		static inline dword( word h, word l ) {
+{H		static inline dword combinew( word h, word l ) {
 {H			return(( (dword)h << 16 ) | (dword)l );
 {H		\}
 
@@ -654,7 +695,7 @@ state record.
 {H		static inline word arg_flag_mask( word op ) { return((word)1 << (( op >> 4 ) & 0x0007 )); \}
 {H		static inline char disp_flag( word flag ) {
 {H			static const char flags[ 8 ] = { 'C', 'Z', 'N', 'V', 'S', 'H', 'T', 'I' \};
-{H			if( word > 7 ) return( '?' );
+{H			if( flag > 7 ) return( '?' );
 {H			return( flags[ flag ]);
 {H		\}
 {H
@@ -685,21 +726,21 @@ state record.
 {H		//		____ __jj jjjj j___	7
 {H		//		____ jjjj jjjj jjjj	12
 {H		//
-{H		static dword arg_absolute( word op, word arg ) { return( COMBINEW((( op & 0x0001 ) | (( op >> 3 ) & 0x003E )), arg )); \}
+{H		static dword arg_absolute( word op, word arg ) { return( combinew((( op & 0x0001 ) | (( op >> 3 ) & 0x003E )), arg )); \}
 {H		static dword arg_branch( word op ) { return( sign_extend<dword,7>(( op >> 3 ) & 0x7F )); \}
-{H		static dword arg_relative( word op ) { return( sign_extend<dword,12>( op & 0x0FFF ); \}
+{H		static dword arg_relative( word op ) { return( sign_extend<dword,12>( op & 0x0FFF )); \}
 {H
 {H		//
 {H		//	Routine returns number of bits set in a byte value.  Rather than
 {H		//	a 256 element table, we will use a 16 element table, twice.
 {H		//
-{H		static byte ones( byte value ) {
+{H		static byte count_ones( byte value ) {
 {H			static byte counted[ 16 ] = {	0, 1, 1, 2,	// 0000 0001 0010 0011
 {H							1, 2, 2, 3,	// 0100 0101 0110 0111
 {H							1, 2, 2, 3,	// 1000 1001 1010 1011
 {H							2, 3, 3, 4	// 1100 1101 1110 1111
-{H			};
-{H			return( counted[ 
+{H			\};
+{H			return( counted[ value >> 4 ] + counted[ value & 0xF ]);
 {H		\}
 {H	public:
 {H		//
@@ -806,7 +847,7 @@ Define the 'illegal' instruction implementation.
 
 {E illegal				}
 
-{ class : public Instruction {
+{ static class : public Instruction {
 { public:
 
 	{ virtual word execute( word opcode, AVR_State *state ) {
@@ -865,6 +906,9 @@ The remainder of this document captures each of the instructions, in the order o
 the instructions encoding and actions is taken from the PDF document referenced
 at the start (AVR-Instruction-Set-Manual-DS40002198A).
 
+The section numbers provided with the instruction title reference directly back to
+this document.
+
 The details below summarise the arguments which are encoded into the opcodes of
 AVR instructions.
 
@@ -896,9 +940,6 @@ AVR instructions.
 
 		jjjjjjj	= 7-bit signed constant (relative branching)
 
-The section numbers provided with the instruction title reference directly back to
-this document.
-
 
 5.1. ADC – Add with Carry
 =========================
@@ -907,28 +948,28 @@ this document.
 { //	
 {I 000111rdddddrrrr adc			}
 
-{ class : public Instruction {
+{ static class : public Instruction {
 { public:
 	{ virtual word execute( word opcode, AVR_State *state ) {
 	{ 	//
 	{ 	//	0001 11rd dddd rrrr
 	{ 	//
-	{ 	word	dr, dv,
-	{ 		rv,
-	{ 		cv, vv;
+	{ 	byte	dr, dv,		// Destination register and value
+	{ 		rv,		// Argument register value
+	{		bv;		// Byte result
+	{	word	wv;		// Word result
 	{ 	bool	c, n, v;
 	{ 	
-	{ 	rv = state->_regs->read( arg_r0_r31( opcode ));
 	{ 	dv = state->_regs->read( dr = arg_d0_d31( opcode ));
-	{ 	cv = ( c = state->get_C())? 1: 0;
-	{ 	vv = rv + dv + cv;
-	{ 	state->set_H( HALF( rv, dv, cv ));
-	{ 	state->set_V( v = (( SIGN( rv ) == SIGN( dv ))&&( SIGN( rv ) != SIGN( vv ))));
-	{ 	state->set_N( n = SIGN( vv ));
+	{ 	rv = state->_regs->read( arg_r0_r31( opcode )) + ( state->get_C()? 1: 0 );
+	{ 	bv = lsb( wv = dv + rv );
+	{ 	state->set_H( half( dv, rv ));
+	{ 	state->set_V( v = overflow( dv, rv, bv ));
+	{ 	state->set_N( n = sign( bv ));
 	{ 	state->set_S( n ^ v );
-	{ 	state->set_C( vv & 0x100 );
-	{ 	state->set_Z(( vv = BYTE( vv )) == 0 );
-	{ 	state->_regs->write( dr, vv );
+	{ 	state->set_C( carry( wv ));
+	{ 	state->set_Z( bv == 0 );
+	{ 	state->_regs->write( dr, bv );
 	{ 	return( 1 );
 	{ \}
 
@@ -953,21 +994,22 @@ this document.
 	{ 	//
 	{ 	//	0000 11rd dddd rrrr
 	{ 	//
-	{ 	word	dr, dv,
-	{ 		rv,
-	{ 		vv;
-	{ 	bool	n, v;
+	{ 	byte	dr, dv,		// Destination register and value
+	{ 		rv,		// Argument register value
+	{		bv;		// Byte result
+	{	word	wv;		// Word result
+	{ 	bool	c, n, v;
 	{ 	
-	{ 	rv = state->_regs->read( arg_r0_r31( opcode ));
 	{ 	dv = state->_regs->read( dr = arg_d0_d31( opcode ));
-	{ 	vv = rv + dv;
-	{ 	state->set_H( HALF( rv, dv, 0 ));
-	{ 	state->set_V( v = (( SIGN( rv ) == SIGN( dv ))&&( SIGN( rv ) != SIGN( vv ))));
-	{ 	state->set_N( n = SIGN( vv ));
+	{ 	rv = state->_regs->read( arg_r0_r31( opcode ));
+	{ 	bv = lsb( wv = dv + rv );
+	{ 	state->set_H( half( dv, rv ));
+	{ 	state->set_V( v = overflow( dv, rv, bv ));
+	{ 	state->set_N( n = sign( bv ));
 	{ 	state->set_S( n ^ v );
-	{ 	state->set_C( vv & 0x100 );
-	{ 	state->set_Z(( vv = BYTE( vv )) == 0 );
-	{ 	state->_regs->write( dr, vv );
+	{ 	state->set_C( carry( wv ));
+	{ 	state->set_Z( bv == 0 );
+	{ 	state->_regs->write( dr, bv );
 	{ 	return( 1 );
 	{ \}
 
@@ -1006,21 +1048,21 @@ Note:
 	{ 	
 	{ 	word	clocks,
 	{ 		dr, dv,
-	{ 		vv, kk;
+	{ 		wv, kk;
 	{ 	bool	n, v;
 	{ 	
 	{ 	if(( clocks = ticks[ state->_cpu ]) == 0 ) state->_error->raise( Unsupported_Instruction, state->_pc, opcode );
 	{ 	dr = arg_d24d25_d30d31( opcode );
-	{ 	dv = COMBINE( state->_regs->read( dr+1 ),  state->_regs->read( dr ));
+	{ 	dv = combine( state->_regs->read( dr+1 ),  state->_regs->read( dr ));
 	{ 	kk = arg_imm6_w( opcode );
-	{ 	vv = dv + kk;
-	{ 	state->set_V( v = ( SIGNW( dv ) != SIGNW( vv )));
-	{ 	state->set_N( n = SIGNW( vv ));
+	{ 	wv = dv + kk;
+	{ 	state->set_V( v = ( signw( dv ) != signw( wv )));
+	{ 	state->set_N( n = signw( wv ));
 	{ 	state->set_S( n ^ v );
-	{ 	state->set_C(( SIGNW( dv ))&&( !SIGNW( vv )));
-	{ 	state->set_Z( vv == 0 );
-	{ 	state->_regs->write( dr, LSBYTE( vv ));
-	{ 	state->_regs->write( dr + 1, MSBYTE( vv ));
+	{ 	state->set_C(( signw( dv ))&&( !signw( wv )));
+	{ 	state->set_Z( wv == 0 );
+	{ 	state->_regs->write( dr, lsb( wv ));
+	{ 	state->_regs->write( dr + 1, msb( wv ));
 	{ 	return( clocks );
 	{ \}
 
@@ -1054,7 +1096,7 @@ Note:
 	{ 	dv = state->_regs->read( dr = arg_d0_d31( opcode ));
 	{ 	vv = rv & dv;
 	{ 	state->set_V( false );
-	{ 	state->set_N( n = SIGN( vv ));
+	{ 	state->set_N( n = sign( vv ));
 	{ 	state->set_S( n );
 	{ 	state->set_Z( vv == 0 );
 	{ 	state->_regs->write( dr, vv );
@@ -1087,7 +1129,7 @@ Note:
 	{ 	
 	{ 	vv = state->_regs->read( dr = arg_d16_d31( opcode )) & arg_imm8( opcode );
 	{ 	state->set_V( false );
-	{ 	state->set_N( n = SIGN( vv ));
+	{ 	state->set_N( n = sign( vv ));
 	{ 	state->set_S( n );
 	{ 	state->set_Z( vv == 0 );
 	{ 	state->_regs->write( dr, vv );
@@ -1096,12 +1138,21 @@ Note:
 
 	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
 
-		Note this instruction is aliased against 'Clear bits in Register' (CBR Rd,K)
-		which is an alias for ANDI Rd,~K.  The disassembly routine will note this and
-		display the appropriate version based on the number of bits set in the constant
-		argument supplied.
+	Note:	This instruction (ANDI) is aliased as 'Clear bits in Register' (CBR Rd,K).
+		The disassembly routine will note this and display the appropriate version
+		based on the number of bits set in the constant argument supplied.
 
-	{ 	snprintf( buffer, max, "andi r%d,0x%02X", (int)arg_d0_d31( opcode ), (int)arg_imm8( opcode ));
+		With 4 or less bits set this is assumed to be an ANDI instruction, with 5
+		or more bits this is assumed to be a CBR instruction.
+
+	{	byte	imm8 = arg_imm8( opcode );
+	{
+	{ 	if( count_ones( imm8 ) > 4 ) {
+	{		snprintf( buffer, max, "cbr r%d,0x%02X", (int)arg_d0_d31( opcode ), (int)(~imm8));
+	{	\}
+	{	else {
+	{		snprintf( buffer, max, "andi r%d,0x%02X", (int)arg_d0_d31( opcode ), (int)imm8);
+	{	\}
 	{ 	return( 1 );
 	{ \}
 
@@ -1126,12 +1177,12 @@ Note:
 	{ 	bool	n;
 	{ 	
 	{ 	dv = state->_regs->read( dr = arg_d0_d31( opcode ));
-	{ 	state->set_N( n = SIGN( dv ));
+	{ 	state->set_N( n = sign( dv ));
 	{ 	vv = ( dv >> 1 ) | ( n? 0x80: 0x00 );
 	{ 	state->set_V( false );
 	{ 	state->set_S( n );
 	{ 	state->set_Z( vv == 0 );
-	{ 	state->set_C( LSBIT( dv ));
+	{ 	state->set_C( odd( dv ));
 	{ 	state->_regs->write( dr, vv );
 	{ 	return( 1 );
 	{ \}
@@ -1157,7 +1208,7 @@ Note:
 	{ 	//
 	{ 	//	1001 0100 1sss 1000
 	{ 	//
-	{ 	*(state->_sr) &= ~arg_flag_mask( opcode ));
+	{ 	*(state->_sr) &= ~arg_flag_mask( opcode );
 	{ 	return( 1 );
 	{ \}
 
@@ -1480,6 +1531,12 @@ Note:
 	{ \}
 
 	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
+
+	Note:
+		Probably should code to modify the output of the hex target address to match
+		the value in _pas (_pas_bytes).  For the moment picking the most common
+		16-bit call address is a simple and broadly correct assumption.
+
 	{ 	snprintf( buffer, max, "call 0x%04X", arg_absolute( opcode, state->peek_ahead( 1 )));
 	{ 	return( 2 );
 	{ \}
@@ -1597,20 +1654,62 @@ See section 5.7 and 5.35 above.
 { //
 {I 1001010ddddd0000 com			}
 
-	{ static word op_com( word opcode, AVR_State *state ) {
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
 	{	//
 	{	//	1001 010d dddd 0000
 	{	//
-	{ 	return( 0 );
+	{ 	byte	dr, vv;
+	{ 	bool	n;
+	{ 	
+	{ 	vv = ~( state->_regs->read( dr = arg_d0_d31( opcode )));
+	{ 	state->set_V( false );
+	{ 	state->set_N( n = sign( vv ));
+	{ 	state->set_S( n );
+	{ 	state->set_C( true );
+	{ 	state->set_Z( vv == 0 );
+	{ 	state->_regs->write( dr, vv );
+	{ 	return( 1 );
 	{ \}
 
-	{ static word dis_com( word opcode, AVR_State *state, char *buffer, int max ) {
+	{ virtual word disassemble( word opcode, AVR_State *state, char *buffer, int max ) {
 	{ 	snprintf( buffer, max, "com r%d", arg_d0_d31( opcode ));
 	{ 	return( 1 );
 	{ \}
 
-{ static instruction inst_com = { op_com, dis_com \};
+{ \} com_inst;
 
+
+5.45 CP – Compare
+=================
+{ //
+{ //	CP Rd,Rr		Rd - Rr			(Compare)
+{ //
+{I 000101rdddddrrrr cp			}
+
+{ class : public Instruction {
+{ public:
+	{ virtual word execute( word opcode, AVR_State *state ) {
+	{ 	//
+	{ 	//	0001 01rd dddd rrrr
+	{ 	//
+	{ 	word	dr, dv,
+	{ 		rv,
+	{ 		vv;
+	{ 	bool	n, v;
+	{ 	
+	{ 	rv = state->_regs->read( arg_r0_r31( opcode ));
+	{ 	dv = state->_regs->read( dr = arg_d0_d31( opcode ));
+	{ 	vv = dv - rv;
+	{ 	state->set_H( borrow( rv, dv, 0 ));
+	{ 	state->set_V( v = (( sign( rv ) == sign( dv ))&&( sign( rv ) != sign( vv ))));
+	{ 	state->set_N( n = sign( vv ));
+	{ 	state->set_S( n ^ v );
+	{ 	state->set_C( carry( vv ));
+	{ 	state->set_Z(( vv = lsb( vv )) == 0 );
+	{ 	return( 1 );
+	{ \}
 
 
 
@@ -1667,17 +1766,15 @@ See section 5.7 and 5.35 above.
 	{ 	return( 0 );
 	{ \}
 
-{I 000101rdddddrrrr cp			} CP Rd,Rr		Rd - Rr			(Compare)
-	{ static word op_cp( word opcode, AVR_State *state ) {
-	{ 	return( 0 );
-	{ \}
-
 {I 000110rdddddrrrr sub			} SUB Rd,Rr		Rd = Rd - Rr
 	{ static word op_sub( word opcode, AVR_State *state ) {
 	{ 	return( 0 );
 	{ \}
 
 {I 001001rdddddrrrr eor			} EOR Rd,Rr		Rd = Rd ^ Rr
+
+Remember CLR Rd is an alias for EOR Rd,Rd (both being the same register).
+
 	{ static word op_eor( word opcode, AVR_State *state ) {
 	{ 	return( 0 );
 	{ \}
