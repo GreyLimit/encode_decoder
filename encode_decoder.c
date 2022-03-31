@@ -25,7 +25,7 @@
  *		provides the type of the data being supplied in
  *		the rest of the data item.
  *
- *	Input data types:
+ *	Record Commands:
  *
  *	Z	Provide the number of bits which define the size of an
  *		instruction (typically 8 or 16).
@@ -111,6 +111,23 @@
  *	H	Content is passed into the header file with the file name
  *		either based on the input file (with '.h' applied) or simply
  *		also sent to stdout with the other output.
+ *
+ * 	Block Commands:
+ *
+ * 		These are Record Commands which are used to bracket a number
+ * 		of lines for pass through to one of the header files, the start
+ * 		of the source file or the tail of the source file.
+ *
+ * 	BS	Used to indicate following line belong at the Start of the
+ *		source file.
+ *
+ * 	BE	Used to indicate following line belong at the End of the
+ *		source file.
+ *
+ * 	BH	Used to indicate following lines belong in the header file.
+ *
+ * 	BF	Used to indicate the end of a block of lines.
+ * 
  */
 
 /*
@@ -129,6 +146,13 @@
 #define ERROR_RECORD		'E'
 #define WORDS_RECORD		'W'
 #define HEADER_RECORD		'H'
+
+#define BLOCK_RECORD		'B'
+#define BLOCK_START		'S'
+#define BLOCK_END		'E'
+#define BLOCK_HEADER		'H'
+#define BLOCK_FINISH		'F'
+
 #define INSERT_HERE		'%'
 #define ONE_BIT			'1'
 #define ZERO_BIT		'0'
@@ -355,6 +379,15 @@ static enum {
 	HEADER_TARGET
 } output_target = UNSPECIFIED_TARGET;
 
+/*
+ *	Enumeration with variable for tracking the block mode in force.
+ */
+ static enum {
+	 LINE_MODE,
+	 START_MODE,
+	 END_MODE,
+	 HEADER_MODE
+} block_mode = LINE_MODE;
 
 
 /************************************************
@@ -718,7 +751,6 @@ static bool process( int line, char *input, char *comment ) {
 			 *	Add more data to the end of the file.
 			 */
 			output_target = UNSPECIFIED_TARGET;
-			output_target = UNSPECIFIED_TARGET;
 			FINISH *ptr = NEW( FINISH );
 			ptr->line = line;
 			ptr->data = DUP( input );
@@ -736,6 +768,31 @@ static bool process( int line, char *input, char *comment ) {
 				fprintf( output_header, "#line %d \"%s\"\n", line, output_base_name );
 			}
 			fprintf( output_header, "%s\n", input );
+			break;
+		}
+		case BLOCK_RECORD: {
+			/*
+			 * 	Block entry records handled here.
+			 */
+			output_target = UNSPECIFIED_TARGET;
+			switch( *input ) {
+				case BLOCK_START: {
+					block_mode = START_MODE;
+					break;
+				}
+				case BLOCK_END: {
+					block_mode = END_MODE;
+					break;
+				}
+				case BLOCK_HEADER: {
+					block_mode = HEADER_MODE;
+					break;
+				}
+				default: {
+					fprintf( stderr, "Invalid Block record in line %d.\n", line );
+					return( 1 );
+				}
+			}	
 			break;
 		}
 		case INSTRUCTION_RECORD: {
@@ -1334,45 +1391,98 @@ int main( int argc, char *argv[]) {
 			}
 			buffer[ len ] = EOS;
 			/*
-			 *	Contains a record?
+			 *	Have we got Block Record?
 			 */
 			if(( record = strchr( buffer, BEGIN_RECORD ))) {
-				char	*q;
-
-				/*
-				 *	Skip record start.
-				 */
-				record++;
-				/*
-				 *	Is there an optional record end (remember we have
-				 *	to watch out for escaped end symbols).
-				 */
-				q = record;
-				while(( q = strchr( q, END_RECORD ))) {
-					if( *(q-1) != ESCAPE_SYMBOL ) {
-						*q++ = EOS;
-						break;
-					}
-					/*
-					 *	Strip escape and look again.
-					 */
-					*(q-1) = END_RECORD;
-					strcpy( q, q+1 );
+				if(( record[ 1 ] == BLOCK_RECORD )&&( record[ 2 ] == BLOCK_FINISH )) {
+					block_mode = LINE_MODE;
+					record = NULL;
 				}
-				if( q == NULL ) {
-					q = "";
-				}
-				/*
-				 *	Process this line from after the
-				 *	begin symbol.
-				 */
-				if( !process( line, record, q )) {
-					fprintf( stderr, "Error in line %d.\n", line );
-					return( 1 );
-				}		
 			}
-			else {
-				output_target = UNSPECIFIED_TARGET;
+			/*
+			 *	How we operate is dependent on the block mode..
+			 */
+			switch( block_mode ) {
+				case START_MODE: {
+					/*
+					 *	Output data to the start of the source file.
+					 */
+					if( output_target != SOURCE_TARGET ) {
+						output_target = SOURCE_TARGET;
+						fprintf( output_source, "#line %d \"%s\"\n", line, output_base_name );
+					}
+					fprintf( output_source, "%s\n", buffer );
+					break;
+				}
+				case END_MODE: {
+					/*
+					 *	Output data to the end of the source file.
+					 */
+					output_target = UNSPECIFIED_TARGET;
+					FINISH *ptr = NEW( FINISH );
+					ptr->line = line;
+					ptr->data = DUP( buffer );
+					ptr->next = NULL;
+					*finish_data_tail = ptr;
+					finish_data_tail = &( ptr->next );
+					break;
+				}
+				case HEADER_MODE: {
+					/*
+					 *	Output data to the header file.
+					 */
+					if( output_target != HEADER_TARGET ) {
+						output_target = HEADER_TARGET;
+						fprintf( output_header, "#line %d \"%s\"\n", line, output_base_name );
+					}
+					fprintf( output_header, "%s\n", buffer );
+					break;
+				}
+				default: {
+					/*
+					 * 	We assume anything else is line mode.
+					 * 
+					 *	Contains a record?
+					 */
+					if( record ) {
+						char	*q;
+
+						/*
+						 *	Skip record start.
+						 */
+						record++;
+						/*
+						 *	Is there an optional record end (remember we have
+						 *	to watch out for escaped end symbols).
+						 */
+						q = record;
+						while(( q = strchr( q, END_RECORD ))) {
+							if( *(q-1) != ESCAPE_SYMBOL ) {
+								*q++ = EOS;
+								break;
+							}
+							/*
+							 *	Strip escape and look again.
+							 */
+							*(q-1) = END_RECORD;
+							strcpy( q, q+1 );
+						}
+						if( q == NULL ) {
+							q = "";
+						}
+						/*
+						 *	Process this line from after the
+						 *	begin symbol.
+						 */
+						if( !process( line, record, q )) {
+							fprintf( stderr, "Error in line %d.\n", line );
+							return( 1 );
+						}		
+					}
+					else {
+						output_target = UNSPECIFIED_TARGET;
+					}
+				}
 			}
 		}
 	}
