@@ -126,6 +126,9 @@
  *
  * 	BH	Used to indicate following lines belong in the header file.
  *
+ * 	BC	Used to indicate following lines are only comments and are
+ * 		to be skipped.
+ *
  * 	BF	Used to indicate the end of a block of lines.
  * 
  */
@@ -151,6 +154,7 @@
 #define BLOCK_START		'S'
 #define BLOCK_END		'E'
 #define BLOCK_HEADER		'H'
+#define BLOCK_COMMENT		'C'
 #define BLOCK_FINISH		'F'
 
 #define INSERT_HERE		'%'
@@ -386,7 +390,8 @@ static enum {
 	 LINE_MODE,
 	 START_MODE,
 	 END_MODE,
-	 HEADER_MODE
+	 HEADER_MODE,
+	 COMMENT_MODE
 } block_mode = LINE_MODE;
 
 
@@ -786,6 +791,10 @@ static bool process( int line, char *input, char *comment ) {
 				}
 				case BLOCK_HEADER: {
 					block_mode = HEADER_MODE;
+					break;
+				}
+				case BLOCK_COMMENT: {
+					block_mode = COMMENT_MODE;
 					break;
 				}
 				default: {
@@ -1437,6 +1446,14 @@ int main( int argc, char *argv[]) {
 					}
 					fprintf( output_header, "%s\n", buffer );
 					break;
+				}
+				case COMMENT_MODE: {
+					/*
+					 *	Following lines are just comments, free form
+					 * 	text to be ignored.
+					 */
+					 output_target = UNSPECIFIED_TARGET;
+					 break;
 				}
 				default: {
 					/*
