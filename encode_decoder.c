@@ -1186,14 +1186,14 @@ static int emit_decoder( NODE *node, int left ) {
 			else {
 				fprintf( output_source, ", %s", ptr->name );		/* Leaf node function name */
 			}
-			fprintf( output_source, " }%c\t%s %3d/%3d",
+			fprintf( output_source, " }%c\t%s [%3d]%3d",
 					sep,
 					output_comment_a,
 					node->index,		/* The index number of this node */
 					ptr->line );		/* The line number of the configuration file */
 			for( int i = 0; i < MAX_CODES; i++ ) {
 				if( ptr->description[ i ]) {
-					fprintf( output_source, " %s", ptr->description[ i ]);
+					fprintf( output_source, "\t%s", ptr->description[ i ]);
 				}
 			}
 			if( ptr->matches > 1 ) {
@@ -1241,7 +1241,7 @@ static int emit_decoder( NODE *node, int left ) {
 			else {
 				fprintf( output_source, ", %s", error_handler );
 			}
-			fprintf( output_source, " }%c\t%s %3d Invalid Instruction %s\n",
+			fprintf( output_source, " }%c\t%s [%3d]\tInvalid Instruction %s\n",
 				sep,
 				output_comment_a,
 				node->index,		/* The index number of this node */
@@ -1289,7 +1289,7 @@ static int emit_decoder( NODE *node, int left ) {
 		else {
 			fprintf( output_source, ", NULL" );
 		}
-		fprintf( output_source, " }%c\t%s %3d %s\n",
+		fprintf( output_source, " }%c\t%s [%3d]\t%s\n",
 			sep,
 			output_comment_a,
 			node->index,			/* The index number of this node */
@@ -1539,6 +1539,28 @@ int main( int argc, char *argv[]) {
 	/*
 	 *	Display the decode tree as an organised array
 	 */
+	if( strlen( output_comment_b )) {
+		/*
+		 *	C style start to end comments
+		 */
+		fprintf( output_source, "%s\n", output_comment_a );
+		fprintf( output_source, "\tStart Of Table\n" );
+		fprintf( output_source, "\t==============\n" );
+		fprintf( output_source, "%s\n", output_comment_b );
+	}
+	else {
+		/*
+		 *	C++ style start to end comments
+		 */
+		fprintf( output_source, "%s\n", output_comment_a );
+		fprintf( output_source, "%s\tStart Of Table\n", output_comment_a );
+		fprintf( output_source, "%s\t==============\n", output_comment_a );
+		fprintf( output_source, "%s\n", output_comment_a );
+	}
+	fprintf( output_source, "%s %s %s[ %d ] = {\n", data_scope, data_type, data_name, table_size );
+	(void)emit_decoder( tree, table_size );
+	fprintf( output_source, "};\n" );
+	fprintf( output_source, "\n" );
 	if( strlen( output_comment_b )) {
 		/*
 		 *	C style start to end comments
