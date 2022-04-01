@@ -1408,7 +1408,10 @@ int main( int argc, char *argv[]) {
 					 *	all the line processing code.
 					 */
 					output_target = UNSPECIFIED_TARGET;
-					goto process_next_line;
+					/*
+					 *	Force loop to start next input line processing.
+					 */
+					continue;
 				}
 			}
 			/*
@@ -1505,11 +1508,6 @@ int main( int argc, char *argv[]) {
 				}
 			}
 		}
-
-        process_next_line: ;
-                /*
-                 *      Jump here to start processing the next line.
-                 */
 	}
 
 	/*
