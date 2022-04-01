@@ -775,35 +775,6 @@ static bool process( int line, char *input, char *comment ) {
 			fprintf( output_header, "%s\n", input );
 			break;
 		}
-		case BLOCK_RECORD: {
-			/*
-			 * 	Block entry records handled here.
-			 */
-			output_target = UNSPECIFIED_TARGET;
-			switch( *input ) {
-				case BLOCK_START: {
-					block_mode = START_MODE;
-					break;
-				}
-				case BLOCK_END: {
-					block_mode = END_MODE;
-					break;
-				}
-				case BLOCK_HEADER: {
-					block_mode = HEADER_MODE;
-					break;
-				}
-				case BLOCK_COMMENT: {
-					block_mode = COMMENT_MODE;
-					break;
-				}
-				default: {
-					fprintf( stderr, "Invalid Block record in line %d.\n", line );
-					return( 1 );
-				}
-			}	
-			break;
-		}
 		case INSTRUCTION_RECORD: {
 			INSTRUCTION	*p;
 
@@ -1403,9 +1374,41 @@ int main( int argc, char *argv[]) {
 			 *	Have we got Block Record?
 			 */
 			if(( record = strchr( buffer, BEGIN_RECORD ))) {
-				if(( record[ 1 ] == BLOCK_RECORD )&&( record[ 2 ] == BLOCK_FINISH )) {
-					block_mode = LINE_MODE;
-					record = NULL;
+				if( record[ 1 ] == BLOCK_RECORD ) {
+					switch( record[ 2 ] ) {
+						case BLOCK_FINISH: {
+							block_mode = LINE_MODE;
+							break;
+						}
+						case BLOCK_START: {
+							block_mode = START_MODE;
+							break;
+						}
+						case BLOCK_END: {
+							block_mode = END_MODE;
+							break;
+						}
+						case BLOCK_HEADER: {
+							block_mode = HEADER_MODE;
+							break;
+						}
+						case BLOCK_COMMENT: {
+							block_mode = COMMENT_MODE;
+							break;
+						}
+						default: {
+							fprintf( stderr, "Invalid Block record in line %d.\n", line );
+							return( 1 );
+						}
+					}
+					/*
+					 *	getting here means we have had a valid
+					 *	block command.  as the actual line itself
+					 *	has no other meaning or purpose we skip
+					 *	all the line processing code.
+					 */
+					output_target = UNSPECIFIED_TARGET;
+					goto process_next_line;
 				}
 			}
 			/*
@@ -1502,6 +1505,11 @@ int main( int argc, char *argv[]) {
 				}
 			}
 		}
+
+        process_next_line: ;
+                /*
+                 *      Jump here to start processing the next line.
+                 */
 	}
 
 	/*
@@ -1533,28 +1541,6 @@ int main( int argc, char *argv[]) {
 	/*
 	 *	Display the decode tree as an organised array
 	 */
-	if( strlen( output_comment_b )) {
-		/*
-		 *	C style start to end comments
-		 */
-		fprintf( output_source, "%s\n", output_comment_a );
-		fprintf( output_source, "\tStart Of Table\n" );
-		fprintf( output_source, "\t==============\n" );
-		fprintf( output_source, "%s\n", output_comment_b );
-	}
-	else {
-		/*
-		 *	C++ style start to end comments
-		 */
-		fprintf( output_source, "%s\n", output_comment_a );
-		fprintf( output_source, "%s\tStart Of Table\n", output_comment_a );
-		fprintf( output_source, "%s\t==============\n", output_comment_a );
-		fprintf( output_source, "%s\n", output_comment_a );
-	}
-	fprintf( output_source, "%s %s %s[ %d ] = {\n", data_scope, data_type, data_name, table_size );
-	(void)emit_decoder( tree, table_size );
-	fprintf( output_source, "};\n" );
-	fprintf( output_source, "\n" );
 	if( strlen( output_comment_b )) {
 		/*
 		 *	C style start to end comments
