@@ -65,127 +65,56 @@ Some final comments:
 * The table output contains additional code comments providing details about the table.  These are mostly the index number of the table row, the line number where the source for a leaf node was found and (in `[]`) how many opcodes resolved to this instruction.
 * The emphasis is essentially to get the input table complete and correct.
 
+The program will operate in two ways:
 
-The following is taken for the source code as a more complete description of the record formats supported (note W record affects the number of fields in the table output):
+If no argument is supplied the data is expected from the standard input, and the output is generated on standard output.  In this case the content for any header file in simply output 'mixed up' with the generated source code.
 
-```
-/*
- *	The input stream has the following format definition.
- *
- *	o	Only data following an open brace (to the end of the line
- *		or a close brace) is considered 'data'.  Everything
- *		else is considered a comment.
- *
- *	o	The character immediately following the open brace
- *		provides the type of the data being supplied in
- *		the rest of the data item.
- *
- *	Input data types:
- *
- *	Z	Provide the number of bits which define the size of an
- *		instruction (typically 8 or 16).
- *
- * 			{Z 8}
- *
- * 		Only one per instruction set; must be set before first
- *		instruction definition.
- *
- *	I	Provide details of an instruction definition.  This is
- *		a series of binary numbers, each of S bits long separated
- *		by white space.  The final word, not a binary number and
- *		not needing to be Z bits long, is the name of the instruction.
- *		This is not case sensitive, and is effectively passed through
- *		to the output without interpretation.
- *
- * 		Where bits of the instruction are arguments to the instruction
- *		(and are therefore not actually part of the instruction) they
- *		should be marked with a period or letter.
- *
- *			{I 00000000 NOP}
- * 		or
- *			{I 0101.... ADD}
- *
- * 	F	Provide formatting details for outputting instruction names.
- *		In the absence of a percent symbol this is taken as a prefix,
- * 		where a percent symbol is provided then this is where the
- * 		instruction name will be inserted in the output.
- *
- * 			{F opcode_%_func}
- *
- * 		When no F record has been defined then each record has only
- *		a single result value (being the instruction named in the I record).
- *
- *		If multiple F records are provided then a corresponding number
- *		of result values are created with the decoding data structure.
- *
- * 	T	Provide the name of the array type, defaults "decoder_t".
- *
- *	S	Define the scope of the table, defaults to 'static'.
- *
- * 	N	Provide the name of the array (of the above type), defaults
- * 		"decoder".
- *
- * 	L	Language selection:
- *
- * 			{L C}			Select C
- * 		or
- * 			{L C++}			Select C++
- * 			{L CPP}
- *
- * 		Given the ability of the pre-processor to output text to
- *		the target files ahead of the decoding data, it is required
- *		to make this the first record at head of the input data.
- *
- * 	E	provide the name of a routine to be placed into the decoding
- * 		tree in the event that decoding does not reach a formal
- *		instruction.
- *
- *		If not defined then decoding stops at the nearest valid opcode
- *		and the output table includes details of where the ambiguity is.
- *
- * 			{E illegal_inst}
- *
- * 	W	Define the maximum number of words required to determine a
- * 		target instruction.
- *
- * 		If this is specified as 1 then the output table will NOT
- * 		include a word index (assuming it always be 0).
- *
- *			{W 1}			No index output
- * 		or
- * 			{W 2}			Index output
- *
- * 	[space]
- * 	[tab]	Content of the record is passed through to the output "as is"
- * 		before the content of the table is generated.
- *
- * 	[Underscore]
- *	_	Content of the record is passed through to the output "as is"
- * 		AFTER the content of the table is generated.
- *
- *	H	Content is passed into the header file with the file name
- *		either based on the input file (with '.h' applied) or simply
- *		also sent to stdout with the other output.
- *
- * 	Block Commands:
- *
- * 		These are Record Commands which are used to bracket a number
- * 		of lines for pass through to one of the header files, the start
- * 		of the source file or the tail of the source file.
- *
- * 	BS	Used to indicate following line belong at the Start of the
- *		source file.
- *
- * 	BE	Used to indicate following line belong at the End of the
- *		source file.
- *
- * 	BH	Used to indicate following lines belong in the header file.
- *
- * 	BC	Used to indicate following lines are only comments and are
- * 		to be skipped.
- *
- * 	BF	Used to indicate the end of a block of lines.
- * 
- */
+If the program is given a filename as an argument this is assumed to contain the input data, and TWO files with the same base name as the input file but with '.h' and '.c' or '.cpp' extensions will be created.
 
-```
+The following was originally taken from the source code as a more complete description of the record formats supported (note W record affects the number of fields in the table output):
+
+The input stream has the following format definition.
+
+* Only data following an open brace (to the end of the line or a close brace) is considered 'data'.  Everythingelse is considered a comment.
+
+* A close brace can be 'escaped' using a back slash.
+
+* The character immediately following the open brace provides the type of the data being supplied in the rest of the data item.
+
+For the purposes of the description below the data between the open brace and close brace (or end of line) is considered a record.
+
+The **first** character *immediately* after the open brace determine the type of the record, and the subsequent content of that record.
+
+Type | Meaning | Example
+--- | --- | ---
+Z | Provide the number of bits which define the size of an instruction (typically 8 or 16). Only one per instruction set; must be set before first instruction definition. | ```{Z 8}```
+I | Provide details of an instruction definition.  This is a series of binary numbers, each of S bits long separated by white space.  The final word, not a binary number and not needing to be Z bits long, is the name of the instruction. This is not case sensitive, and is effectively passed through to the output without interpretation. Where bits of the instruction are arguments to the instruction (and are therefore not actually part of the instruction) they should be marked with a period or letter. |  ```{I 00000000 NOP}```  ```{I 0101.... ADD}```
+F	| Provide formatting details for outputting instruction names. In the absence of a percent symbol this is taken as a prefix, where a percent symbol is provided then this is where the instruction name will be inserted in the output. When no F record has been defined then each record has only a single result value (being the instruction named in the I record). If multiple F records are provided then a corresponding number of result values are created with the decoding data structure. | ```{F opcode_%_func}```
+T	| Provide the name of the array type, defaults "decoder_t".| ```{T tree_node }```
+S	| Define the scope of the table, defaults to 'static', probably the right choice |
+N	| Provide the name of the array (of the above type), defaults to "decoder". | ```{N opcode_tree }```
+L	| Language selection. secifiy either C or C++/CPP. Given the ability of the pre-processor to output text to the target files ahead of the decoding data, it is required to make this the first record at head of the input data. | ```{L C}``` ```{L C++}``` ```{L CPP}```
+E	| provide the name of a routine to be placed into the decoding tree in the event that decoding does not reach a formal instruction. If not defined then decoding stops at the nearest valid opcode and the output table includes details of where the ambiguity is.  The name supplied here is still formatted according to the F records specified. | ```{E illegal}```
+W	| Define the maximum number of words required to determine atarget instruction. If this is specified as 1 then the output table will NOT include a word index (assuming it always be 0). |  ```{W 1}``` ```{W 2}```
+[space] | Content of the record is passed through to the start of the source file "as is" before the content of the table is generated.|
+[tab]	| Alias for [space] |
+[Underscore] |  Content of the record is passed through to the end of the source file "as is" AFTER the content of the table is generated.|
+H	| Content is passed into the header "as is"
+
+
+Block Commands are record Commands which are used to bracket a number of lines for pass through to one of the header files, the start of the source file or the tail of the source file.
+
+Block Record | Meaning
+--- | ---
+BS	| Used to indicate following line belong at the Start of the source file.
+BE	| Used to indicate following line belong at the End of the source file.
+BH	| Used to indicate following lines belong in the header file.
+BC	| Used to indicate following lines are only comments and areto be skipped.
+B	| Used to indicate the end of a block of lines.
+
+
+The initial implementation of the block commands had a simple "you're either in a block, or you're not" mechanism.  Starting a new block with one of BS, BE, BH or BC ended the previous block and started the next.
+
+This has been modified (as well as BF becoming simply B) and now blocks can be nested.  Consequently for *every* block starting command there must now be a corresponding block ending command.
+
+This has been done to simplify the mechanism through which source code (mixed with source file block are handled.  I believe.
