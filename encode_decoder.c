@@ -129,8 +129,19 @@
  * 	BC	Used to indicate following lines are only comments and are
  * 		to be skipped.
  *
- * 	BF	Used to indicate the end of a block of lines.
- * 
+ * 	B	Used to indicate the end of a block of lines.
+ *
+ * 	The initial implementation of the block commands had a simple "you're
+ * 	either in a block, or you're not" mechanism.  Starting a new block
+ * 	with one of BS, BE, BH or BC ended the previous block and started the
+ * 	next.
+ *
+ * 	This has been modified (as well as BF becoming simply B) and now blocks
+ * 	can be nested.  Consequently for *every* block starting command there
+ * 	must now be a corresponding block ending command.
+ *
+ * 	This has been done to simplify the mechanism through which header files,
+ * 	source files and block comments are handled.  I believe.
  */
 
 /*
@@ -155,7 +166,6 @@
 #define BLOCK_END		'E'
 #define BLOCK_HEADER		'H'
 #define BLOCK_COMMENT		'C'
-#define BLOCK_FINISH		'F'
 
 #define INSERT_HERE		'%'
 #define ONE_BIT			'1'
@@ -183,7 +193,8 @@
  *	Define simplistic memory allocation routines
  */
 #include <malloc.h>
-#define NEW(t) ((t *)malloc(sizeof(t)))
+#define NEW(t)	((t *)malloc(sizeof(t)))
+#define FREE(p)	free(( void *)(p))
 
 /*
  *	String ops.
@@ -386,13 +397,50 @@ static enum {
 /*
  *	Enumeration with variable for tracking the block mode in force.
  */
- static enum {
-	 LINE_MODE,
-	 START_MODE,
-	 END_MODE,
-	 HEADER_MODE,
-	 COMMENT_MODE
-} block_mode = LINE_MODE;
+enum block_modes {
+	LINE_MODE,
+	START_MODE,
+	END_MODE,
+	HEADER_MODE,
+	COMMENT_MODE
+};
+
+#define BLOCK_STACK struct block_stack
+BLOCK_STACK  {
+	enum block_modes	mode;
+	int			line;
+	BLOCK_STACK		*prev;
+};
+
+static BLOCK_STACK	*root_block_stack = NULL,
+			*spare_block_stack = NULL;
+
+void push_mode( enum block_modes mode, int line ) {
+	BLOCK_STACK *ptr;
+
+	if(( ptr = spare_block_stack )) {
+		spare_block_stack = ptr->prev;
+	}
+	else {
+		ptr = NEW( BLOCK_STACK );
+	}
+	ptr->mode = mode;
+	ptr->line = line;
+	ptr->prev = root_block_stack;
+	root_block_stack = ptr;
+}
+
+int pop_mode( void ) {
+	BLOCK_STACK *ptr;
+	
+	if(( ptr = root_block_stack )) {
+		root_block_stack = ptr->prev;
+		ptr->prev = spare_block_stack;
+		spare_block_stack =  ptr;
+		return( TRUE );
+	}
+	return( FALSE );
+}
 
 
 /************************************************
@@ -1371,29 +1419,35 @@ int main( int argc, char *argv[]) {
 			}
 			buffer[ len ] = EOS;
 			/*
-			 *	Have we got Block Record?
+			 *	Have we got Block Record?  This requires specific
+			 *	handling.
 			 */
 			if(( record = strchr( buffer, BEGIN_RECORD ))) {
 				if( record[ 1 ] == BLOCK_RECORD ) {
 					switch( record[ 2 ] ) {
-						case BLOCK_FINISH: {
-							block_mode = LINE_MODE;
-							break;
-						}
 						case BLOCK_START: {
-							block_mode = START_MODE;
+							push_mode( START_MODE, line );
 							break;
 						}
 						case BLOCK_END: {
-							block_mode = END_MODE;
+							push_mode( END_MODE, line );
 							break;
 						}
 						case BLOCK_HEADER: {
-							block_mode = HEADER_MODE;
+							push_mode( HEADER_MODE, line );
 							break;
 						}
 						case BLOCK_COMMENT: {
-							block_mode = COMMENT_MODE;
+							push_mode( COMMENT_MODE, line );
+							break;
+						}
+						case SPACE:
+						case TAB:
+						case END_RECORD: {
+							if( !pop_mode()) {
+								fprintf( stderr, "Block ends without corresponding start, line %d.\n", line );
+								return( 1 );
+							}
 							break;
 						}
 						default: {
@@ -1417,97 +1471,114 @@ int main( int argc, char *argv[]) {
 			/*
 			 *	How we operate is dependent on the block mode..
 			 */
-			switch( block_mode ) {
-				case START_MODE: {
-					/*
-					 *	Output data to the start of the source file.
-					 */
-					if( output_target != SOURCE_TARGET ) {
-						output_target = SOURCE_TARGET;
-						fprintf( output_source, "#line %d \"%s\"\n", line, output_base_name );
-					}
-					fprintf( output_source, "%s\n", buffer );
-					break;
-				}
-				case END_MODE: {
-					/*
-					 *	Output data to the end of the source file.
-					 */
-					output_target = UNSPECIFIED_TARGET;
-					FINISH *ptr = NEW( FINISH );
-					ptr->line = line;
-					ptr->data = DUP( buffer );
-					ptr->next = NULL;
-					*finish_data_tail = ptr;
-					finish_data_tail = &( ptr->next );
-					break;
-				}
-				case HEADER_MODE: {
-					/*
-					 *	Output data to the header file.
-					 */
-					if( output_target != HEADER_TARGET ) {
-						output_target = HEADER_TARGET;
-						fprintf( output_header, "#line %d \"%s\"\n", line, output_base_name );
-					}
-					fprintf( output_header, "%s\n", buffer );
-					break;
-				}
-				case COMMENT_MODE: {
-					/*
-					 *	Following lines are just comments, free form
-					 * 	text to be ignored.
-					 */
-					 output_target = UNSPECIFIED_TARGET;
-					 break;
-				}
-				default: {
-					/*
-					 * 	We assume anything else is line mode.
-					 * 
-					 *	Contains a record?
-					 */
-					if( record ) {
-						char	*q;
-
+			if( root_block_stack ) {
+				/*
+				 *	We are in a block mode..
+				 */
+				switch( root_block_stack->mode ) {
+					case START_MODE: {
 						/*
-						 *	Skip record start.
+						 *	Output data to the start of the source file.
 						 */
-						record++;
-						/*
-						 *	Is there an optional record end (remember we have
-						 *	to watch out for escaped end symbols).
-						 */
-						q = record;
-						while(( q = strchr( q, END_RECORD ))) {
-							if( *(q-1) != ESCAPE_SYMBOL ) {
-								*q++ = EOS;
-								break;
-							}
-							/*
-							 *	Strip escape and look again.
-							 */
-							*(q-1) = END_RECORD;
-							strcpy( q, q+1 );
+						if( output_target != SOURCE_TARGET ) {
+							output_target = SOURCE_TARGET;
+							fprintf( output_source, "#line %d \"%s\"\n", line, output_base_name );
 						}
-						if( q == NULL ) {
-							q = "";
-						}
-						/*
-						 *	Process this line from after the
-						 *	begin symbol.
-						 */
-						if( !process( line, record, q )) {
-							fprintf( stderr, "Error in line %d.\n", line );
-							return( 1 );
-						}		
+						fprintf( output_source, "%s\n", buffer );
+						break;
 					}
-					else {
+					case END_MODE: {
+						/*
+						 *	Output data to the end of the source file.
+						 */
 						output_target = UNSPECIFIED_TARGET;
+						FINISH *ptr = NEW( FINISH );
+						ptr->line = line;
+						ptr->data = DUP( buffer );
+						ptr->next = NULL;
+						*finish_data_tail = ptr;
+						finish_data_tail = &( ptr->next );
+						break;
+					}
+					case HEADER_MODE: {
+						/*
+						 *	Output data to the header file.
+						 */
+						if( output_target != HEADER_TARGET ) {
+							output_target = HEADER_TARGET;
+							fprintf( output_header, "#line %d \"%s\"\n", line, output_base_name );
+						}
+						fprintf( output_header, "%s\n", buffer );
+						break;
+					}
+					default: {
+						/*
+						 *	Following lines are just comments, free form
+						 * 	text to be ignored.
+						 */
+						 output_target = UNSPECIFIED_TARGET;
+						 break;
 					}
 				}
 			}
+			else {
+				/*
+				 * 	No mode stack means we are in line mode.
+				 * 
+				 *	Contains a record?
+				 */
+				if( record ) {
+					char	*q;
+
+					/*
+					 *	Skip record start.
+					 */
+					record++;
+					/*
+					 *	Is there an optional record end (remember we have
+					 *	to watch out for escaped end symbols).
+					 */
+					q = record;
+					while(( q = strchr( q, END_RECORD ))) {
+						if( *(q-1) != ESCAPE_SYMBOL ) {
+							*q++ = EOS;
+							break;
+						}
+						/*
+						 *	Strip escape and look again.
+						 */
+						*(q-1) = END_RECORD;
+						strcpy( q, q+1 );
+					}
+					if( q == NULL ) {
+						q = "";
+					}
+					/*
+					 *	Process this line from after the
+					 *	begin symbol.
+					 */
+					if( !process( line, record, q )) {
+						fprintf( stderr, "Error in line %d.\n", line );
+						return( 1 );
+					}		
+				}
+				else {
+					output_target = UNSPECIFIED_TARGET;
+				}
+			}
 		}
+	}
+	
+	/*
+	 * 	If the block mode stack is not empty then there is an error.
+	 */
+	if( root_block_stack ) {
+		fprintf( stderr, "Unterminated block(s) in file:\n" );
+		while( root_block_stack ) {
+			fprintf( stderr, "line %d.\n", root_block_stack->line );
+			root_block_stack = root_block_stack->prev;
+		}
+		return( 1 );
 	}
 
 	/*
