@@ -76,7 +76,7 @@ decoder.
 //	table to compile.
 //
 #include "AVR_CPU.h"
-{BF}
+{B}
 
 The Decode Definitions File
 ===========================
@@ -84,6 +84,7 @@ The Decode Definitions File
 Set out in the header file the interface to the
 decoder.  This is the definition of the AVR CPU
 state record.
+
 
 {BH}
 //
@@ -132,7 +133,7 @@ class AVR_CPU;
 //	the source file.
 //
 extern Instruction *find_instruction( word opcode );
-{BF}
+{B}
 
 
 {BH}
@@ -167,7 +168,7 @@ typedef enum {
 //	Define the number of types we will support (as above).
 //
 const byte AVR_Types = 6;
-{BF}
+{B}
 
 Define the class used to hold the AVR CPU state information, and
 provide the CPU class API routines to allow the simulation to be
@@ -402,7 +403,7 @@ class AVR_CPU : public CPU {
 			//
 			reset();
 		}
-{BH}
+{B}
 		//
 		//	Value Manipulation
 		//	------------------
@@ -792,6 +793,12 @@ class AVR_CPU : public CPU {
 			if( !x ) set_rampx( p - 1 );	// decrement rampx if x rolled to zero.
 			return(( (dword)p << 16 ) | (dword)x );
 		}
+		//
+		//	"D"
+		//
+		dword get_rampd_const( word v ) {
+			return(( (dword)get_rampd() << 16 ) | (dword)v );
+		}
 
 
 		//
@@ -814,10 +821,6 @@ class AVR_CPU : public CPU {
 		//
 		virtual void reset( void );
 {BS}	
-		//
-		//	Reset CPU to initial condition ready for first
-		//	instruction execution.
-		//
 		void AVR_CPU::reset( void ) {	
 			//
 			//	Clear any pending interrupts.
@@ -849,19 +852,13 @@ class AVR_CPU : public CPU {
 			//
 			_pc = 0x0000;
 		}
-
-{BH}
+{B}
 		//
 		//	Execute a single instruction, move PC forward, accepts
 		//	interrupts etc as necessary.
 		//
 		virtual void step( void );
-
 {BS}
-		//
-		//	Execute a single instruction, move PC forward, accepts
-		//	interrupts etc as necessary.
-		//
 		void AVR_CPU::step( void ) {
 			Instruction	*inst;
 			word		opcode,
@@ -904,21 +901,21 @@ class AVR_CPU : public CPU {
 					//	We have an interrupt pending, so we need
 					//	to do a couple of things:
 					//
-					//	1/ Reset the I flag.
-					//	2/ Clear the causal interrupt.
-					//	3/ Stack the program counter and set the program
-					//	   counter to the right vector.
+					//	1/ Reset the I flag (to stop nested interrupts)
+					//	2/ Clear the selected flag (as we are handling it)
+					//	3/ Stack the program counter and set it to the
+					//	   right vector.
 					//
 					//	We set the PC to the address of the interrupt 'vector',
-					//	though this is not a vector (in my opinion).
-					//
-					//	At each IRQ target address are two words (before the next
-					//	IRQ target address) which is enough space for an absolute
-					//	jump or two single word instructions.
+					//	though this is not a vector (in my opinion) as we do not
+					//	load an address from here, we simply start executing
+					//	instructions at this point .. so ... At each IRQ target
+					//	address are two words (before the next IRQ target address)
+					//	which is enough space for an absolute jump or two single
+					//	word instructions.
 					//
 					set_I( false );
 					_irqs->clear( irq );
-					;
 					//
 					//	The following is, honestly, an educated guess;
 					//
@@ -939,40 +936,35 @@ class AVR_CPU : public CPU {
 		
 			//
 			//	Step Three:	Obtain the opcode word at the
-			//			current PC value and identify
-			//			the associated instruction.
-			//
-			//			Then execute it.
+			//			current PC value, identify the
+			//			associated instruction and then
+			//			execute it.
 			//
 			opcode = next_opcode();
 			inst = find_instruction( opcode );
-			_clock->tick( inst->execute( opcode, this ));
+			if(( ticks = inst->execute( opcode, this ))) {
+				_clock->tick( ticks );
+			}
+			else {
+				_error->raise( Unsupported_Instruction, opcode );
+			}
 		}
-
-{BH}
-
+{B}
 		//
 		//	Disassemble the instruction at location PC+offset.
 		//
 		//	Returns number of opcodes used by the disassembly.
 		//
 		virtual word disassemble( word offset, char *buffer, int max );
-
 {BS}
-		//
-		//	Disassemble the instruction at location PC+offset.
-		//
-		//	Returns number of opcodes used by the disassembly.
-		//
 		word AVR_CPU::disassemble( word offset, char *buffer, int max ) {
 			word		opcode = peek_ahead( 0 );
 			Instruction	*inst = find_instruction( opcode );
 			return( inst->disassemble( opcode, this, buffer, max ));
 		}
-
-{BH}
+{B}
 };
-{BF}
+{B}
 
 
 {BH}
@@ -985,7 +977,7 @@ class Instruction {
 {BC}
 		The following definitions are made available to the implementation file
 		to simplify the definition of the individual instructions actions.
-{BH}
+{B}
 		//
 		//	Sign extension routine.
 		//
@@ -1009,7 +1001,7 @@ class Instruction {
 
 		Used by code performing BCD maths to correct answers after
 		addition.  Is this still used anywhere?
-{BH}
+{B}
 		static inline bool half( byte a, byte b ) {
 			return(( nibble( a ) + nibble( b )) > 9 );
 		}
@@ -1018,7 +1010,7 @@ class Instruction {
 		than the bottom nibble of b.  In a subtraction this would
 		cause a "borrowed" bit from the higher nibble to be carried
 		down.
-{BH}
+{B}
 		static inline bool borrow( byte a, byte b ) {
 			return( nibble( a ) < nibble( b ));
 		}
@@ -1035,7 +1027,7 @@ class Instruction {
 {BC}
 		Return indication of signed Overflow if b were added to a
 		resulting in c.
-{BH}
+{B}
 		static inline bool overflow( byte a, byte b, byte c ) {
 			return(( sign( a ) == sign( b ))&&( sign( a ) != sign( c )));
 		}
@@ -1043,7 +1035,7 @@ class Instruction {
 		Return indication of signed Underflow if b were subtracted
 		from a resulting in c.  This is, in effect, the inverse of
 		signed overflow.
-{BH}
+{B}
 		static inline bool underflow( byte a, byte b, byte c ) {
 			return( !overflow( a, b, c ));
 		}
@@ -1069,7 +1061,6 @@ class Instruction {
 		static inline word combine( byte h, byte l ) {
 			return(( (word)h << 8 ) | (word)l );
 		}
-
 		static word negatew( word v ) { return(( ~v ) + 1 ); }
 
 		//
@@ -1227,7 +1218,7 @@ class Instruction {
 		//
 		virtual word size( void ) { return( 1 ); }
 		//
-		//	Fill an buffer with the mnemonic of the instruction.
+		//	Fill a buffer with the mnemonic of the instruction.
 		//
 		//	Return number of program words required to fully
 		//	disassemble the instruction.
@@ -1241,7 +1232,7 @@ class Instruction {
 //
 //	EOF
 //
-{BF}
+{B}
 
 The Decode Implementation File
 ==============================
@@ -1250,14 +1241,14 @@ The start of the decoding details:
 
 {BS}
 //
-//	Define the decoder node type.
+//	Define the type which will hold a node of the decoder.
 //
 typedef struct {
 	word		mask,		// Which bit do we test (no word index required).
 			jump;		// How many to jump if bit is 1.
 	Instruction	*data;		// The data structure to return address of.
 } decoder_entry;
-{BF}
+{B}
 
 
 At the end of the file we define the lookup function itself.
@@ -1278,21 +1269,25 @@ Instruction *find_instruction( word opcode ) {
 //
 //	EOF
 //
-{BF}
+{B}
 
 Define the STACK(x) macro to assist with adjusting the clock timing
-data.  The macro is defined to remove for the documentation timing
-data the base number of clock cycles from instructions which push
-or pop the program counter the stack.  These clock timings will be
-specified as 'STACK( 4 )'.
+data.  The macro is defined to adjust the documented timing data leaving
+the base number of clock cycles for the instructions.  Subsequent pushing
+or popping the program counter to/from the stack will bring the clock
+count to the correct value.  These clock timings will be specified as
+(for example) 'STACK( 4 )'.
 
-{ #define STACK(n) ((n)-2) }
+The push and pop routines return an 'additional' clock count from 0 to 2,
+as required by the size of the pc being emulated.
+
+	{ #define STACK(n) ((n)-2) }
 
 Finally, define a C character string that contains the 'lead-in'
 characters for hexidecimal constant values (when displayed by the
-disassembly routines).
+disassembly routines).  I anticipate this will be either "0x" or "$".
 
-{ #define HEX "0x" }
+	{ #define HEX "0x" }
 
 
 AVR Instruction Table
@@ -1306,7 +1301,7 @@ Define the specific details that the decoder encoder needs to know:
 	{T decoder_entry }
 	{N decode_table }
 
-The output table will point to an instance of class Instruction which
+The lookup table generated will point to an instance of class Instruction which
 contains methods that enact the various aspects of the identified instruction.
 
 The individual instruction pointers are processed according to the following
@@ -1371,19 +1366,19 @@ public:
 		return( 1 );
 	}
 } illegal_inst;
-{BF}
+{B}
 
 The remainder of this document captures each of the instructions.  The order of
 the instructions encoding and actions is taken from the PDF document referenced
 at the start (AVR-Instruction-Set-Manual-DS40002198A).
 
 The section numbers provided with the instruction title reference directly back to
-this document.
+that document.
 
 The details below summarise the arguments which are encoded into the opcodes of
 AVR instructions.
 
-	Opcode argument bits: 
+	Opcode encoded argument bits: 
 
 		rrrrr	= Source register (R0-R31)
 		ddddd	= Destination register (R0-R31)
@@ -1457,7 +1452,7 @@ public:
 		return( 1 );
 	}
 } adc_inst;
-{BF}
+{B}
 
 
 5.2. ADD – Add without Carry
@@ -1505,7 +1500,7 @@ public:
 		return( 1 );
 	}
 } add_inst;
-{BF}
+{B}
 
 
 5.3. ADIW – Add Immediate to Word
@@ -1559,7 +1554,7 @@ public:
 		return( 1 );
 	}
 } adiw_inst;
-{BF}
+{B}
 
 
 5.4 AND – Logical AND
@@ -1597,7 +1592,7 @@ public:
 		return( 1 );
 	}
 } and_inst;
-{BF}
+{B}
 
 
 5.5 ANDI – Logical AND with Immediate
@@ -1634,7 +1629,7 @@ public:
 
 		With 4 or less bits set this is assumed to be an ANDI instruction, with 5
 		or more bits this is assumed to be a CBR instruction.
-{BS}
+{B}
 		byte	imm8 = arg_imm8( opcode );
 	
 		if( count_ones( imm8 ) > 4 ) {
@@ -1646,7 +1641,7 @@ public:
 		return( 1 );
 	}
 } andi_inst;
-{BF}
+{B}
 
 
 5.6 ASR – Arithmetic Shift Right
@@ -1683,7 +1678,7 @@ public:
 		return( 1 );
 	}
 } asr_inst;
-{BF}
+{B}
 
 
 5.7 BCLR – Bit Clear in SREG
@@ -1710,7 +1705,7 @@ public:
 		return( 1 );
 	}
 } bclr_inst;
-{BF}
+{B}
 
 
 5.8 BLD – Bit Load from the T Bit in SREG to a Bit in Register
@@ -1745,7 +1740,7 @@ public:
 		return( 1 );
 	}
 } bld_inst;
-{BF}
+{B}
 
 
 5.9 BRBC – Branch if Bit in SREG is Cleared
@@ -1775,7 +1770,7 @@ public:
 		return( 1 );
 	}
 } brbc_inst;
-{BF}
+{B}
 
 
 5.10 BRBS – Branch if Bit in SREG is Set
@@ -1805,7 +1800,7 @@ public:
 		return( 1 );
 	}
 } brbs_inst;
-{BF}
+{B}
 
 
 5.11 BRCC – Branch if Carry Cleared
@@ -1847,7 +1842,7 @@ public:
 		return( 1 );
 	}
 } break_inst;
-{BF}
+{B}
 
 
 5.14 BREQ – Branch if Equal
@@ -1970,7 +1965,7 @@ public:
 		return( 1 );
 	}
 } bset_inst;
-{BF}
+{B}
 
 
 5.31 BST – Bit Store from Bit in Register to T Bit in SREG
@@ -1996,7 +1991,7 @@ public:
 		return( 1 );
 	}
 } bst_inst;
-{BF}
+{B}
 
 
 5.32 CALL – Long Call to a Subroutine
@@ -2030,7 +2025,7 @@ public:
 		Probably should code to modify the output of the hex target address to match
 		the value in _pas_bits and _pas_bytes.  For the moment picking the most common
 		16-bit call address is a simple and broadly correct assumption.
-{BS}
+{B}
 		snprintf( buffer, max, "call " HEX "%04X", arg_absolute( opcode, state->peek_ahead( 1 )));
 		return( 2 );
 	}
@@ -2040,7 +2035,7 @@ public:
 	virtual word size( void ) { return( 2 ); }
 
 } call_inst;
-{BF}
+{B}
 
 
 5.33 CBI – Clear Bit in I/O Register
@@ -2070,7 +2065,7 @@ public:
 		return( 1 );
 	}
 } cbi_inst;
-{BF}
+{B}
 
 
 5.34 CBR – Clear Bits in Register
@@ -2179,7 +2174,7 @@ public:
 		return( 1 );
 	}
 } com_inst;
-{BF}
+{B}
 
 
 5.45 CP – Compare
@@ -2218,7 +2213,7 @@ public:
 		return( 1 );
 	}
 } cp_inst;
-{BF}
+{B}
 
 
 5.46 CPC – Compare with Carry
@@ -2257,7 +2252,7 @@ public:
 		return( 1 );
 	}
 } cpc_inst;
-{BF}
+{B}
 
 
 5.47 CPI – Compare with Immediate
@@ -2296,7 +2291,7 @@ public:
 		return( 1 );
 	}
 } cpi_inst;
-{BF}
+{B}
 
 
 5.48 CPSE – Compare Skip if Equal
@@ -2331,7 +2326,7 @@ public:
 		A benefit of moving the skipping logic to the main loop enables
 		the supporting code to be common across all instructions that
 		possibly initiate an instruction skip.
-{BS}
+{B}
 		if( state->read_reg( arg_d0_d31( opcode )) == state->read_reg( arg_r0_r31( opcode ))) state->set_skip_next();
 		return( 1 );
 	}
@@ -2340,7 +2335,7 @@ public:
 		return( 1 );
 	}
 } cpse_inst;
-{BF}
+{B}
 
 
 5.49 DEC – Decrement
@@ -2377,7 +2372,7 @@ public:
 		return( 1 );
 	}
 } dec_inst;
-{BF}
+{B}
 
 
 5.50 DES – Data Encryption Standard
@@ -2409,7 +2404,7 @@ public:
 		This simulation does nothing, and all registers remain
 		unmodified effectively making the clear and cypher text
 		identical.
-{BS}
+{B}
 		if( state->raise( Not_Implemented, opcode )) return( 0 );
 		
 		return( clocks );
@@ -2419,7 +2414,7 @@ public:
 		return( 1 );
 	}
 } des_inst;
-{BF}
+{B}
 
 5.51 EICALL – Extended Indirect Call to Subroutine
 ==================================================
@@ -2449,7 +2444,7 @@ public:
 		return( 1 );
 	}
 } eicall_inst;
-{BF}
+{B}
 
 
 5.52 EIJMP – Extended Indirect Jump
@@ -2481,7 +2476,7 @@ public:
 		return( 1 );
 	}
 } eijmp_inst;
-{BF}
+{B}
 
 
 5.53 ELPM – Extended Load Program Memory
@@ -2529,7 +2524,7 @@ public:
 		return( 1 );
 	}
 } elpm_r0_inst;
-{BF}
+{B}
 
 {I 1001000ddddd0110 elpm_z }	ELPM Rd,Z		Rd = PS(RAMPZ:Z)
 
@@ -2560,7 +2555,7 @@ public:
 		return( 1 );
 	}
 } elpm_z_inst;
-{BF}
+{B}
 
 {I 1001000ddddd0111 elpm_zp }	ELPM Rd,Z+		Rd = PS(RAMPZ:Z+)
 
@@ -2591,7 +2586,7 @@ public:
 		return( 1 );
 	}
 } elpm_zp_inst;
-{BF}
+{B}
 
 
 5.54 EOR – Exclusive OR
@@ -2638,7 +2633,7 @@ public:
 		return( 1 );
 	}
 } eor_inst;
-{BF}
+{B}
 
 
 5.55 FMUL – Fractional Multiply Unsigned
@@ -2679,7 +2674,7 @@ public:
 		return( 1 );
 	}
 } fmul_inst;
-{BF}
+{B}
 
 
 5.56 FMULS – Fractional Multiply Signed
@@ -2723,7 +2718,7 @@ public:
 		return( 1 );
 	}
 } fmuls_inst;
-{BF}
+{B}
 
 
 5.57 FMULSU – Fractional Multiply Signed with Unsigned
@@ -2767,7 +2762,7 @@ public:
 		return( 1 );
 	}
 } fmulsu_inst;
-{BF}
+{B}
 
 
 5.58 ICALL – Indirect Call to Subroutine
@@ -2794,7 +2789,7 @@ public:
 		return( 1 );
 	}
 } icall_inst;
-{BF}
+{B}
 
 
 5.59 IJMP – Indirect Jump
@@ -2821,7 +2816,7 @@ public:
 		return( 1 );
 	}
 } ijmp_inst;
-{BF}
+{B}
 
 
 5.60 IN - Load an I/O Location to Register
@@ -2847,7 +2842,7 @@ public:
 		return( 1 );
 	}
 } in_inst;
-{BF}
+{B}
 
 
 5.61 INC – Increment
@@ -2884,7 +2879,7 @@ public:
 		return( 1 );
 	}
 } inc_inst;
-{BF}
+{B}
 
 
 5.62 JMP – Jump
@@ -2918,7 +2913,7 @@ public:
 		Probably should code to modify the output of the hex target address to match
 		the value in _pas_bits and _pas_bytes.  For the moment picking the most common
 		16-bit call address is a simple and broadly correct assumption.
-{BS}
+{B}
 		snprintf( buffer, max, "jmp " HEX "%04X", arg_absolute( opcode, state->peek_ahead( 1 )));
 		return( 2 );
 	}
@@ -2928,7 +2923,7 @@ public:
 	virtual word size( void ) { return( 2 ); }
 
 } jmp_inst;
-{BF}
+{B}
 
 
 5.63 LAC – Load and Clear
@@ -2961,7 +2956,7 @@ public:
 		return( 1 );
 	}
 } lac_inst;
-{BF}
+{B}
 
 
 5.64 LAS – Load and Set
@@ -2994,7 +2989,7 @@ public:
 		return( 1 );
 	}
 } las_inst;
-{BF}
+{B}
 
 
 5.65 LAT – Load and Toggle
@@ -3027,7 +3022,7 @@ public:
 		return( 1 );
 	}
 } lat_inst;
-{BF}
+{B}
 
 
 5.66 LD – Load Indirect from Data Space to Register using X
@@ -3056,7 +3051,7 @@ public:
 			note if the RAM is external to the MCU.
 
 			For the moment, the answer '2' is mostly right.
-{BS}
+{B}
 		return( 2 );
 	}
 	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
@@ -3064,7 +3059,7 @@ public:
 		return( 1 );
 	}
 } ld_x_inst;
-{BF}
+{B}
 
 {I 1001000ddddd1101 ld_xp }	LD Rd,X+		Rd = DS(X+)
 
@@ -3081,7 +3076,7 @@ public:
 		state->write_reg( arg_d0_d31( opcode ), state->read_data( state->inc_rampx_rx()));
 {BC}
 		Note the timing issues outlined above.
-{BS}
+{B}
 		return( 2 );
 	}
 	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
@@ -3089,7 +3084,7 @@ public:
 		return( 1 );
 	}
 } ld_xp_inst;
-{BF}
+{B}
 
 {I 1001000ddddd1110 ld_nx }	LD Rd,-X		Rd = DS(-X)
 
@@ -3106,7 +3101,7 @@ public:
 		state->write_reg( arg_d0_d31( opcode ), state->read_data( state->dec_rampx_rx()));
 {BC}
 		Note the timing issues outlined above.
-{BS}
+{B}
 		return( 2 );
 	}
 	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
@@ -3114,7 +3109,7 @@ public:
 		return( 1 );
 	}
 } ld_nx_inst;
-{BF}
+{B}
 
 
 5.67 LD (LDD) – Load Indirect from Data Space to Register using Y
@@ -3147,14 +3142,14 @@ public:
 {BC}
 		Note:
 			The cycle times associated with this instruction
-			(and probably many other that access through the
+			(and probably many others that access through the
 			DS() memory route) have variable cycles counts that
 			are effectively determined by the address (ie what
 			area of memory you access).  This is especially of
 			note if the RAM is external to the MCU.
 
 			For the moment, the answer '2' is mostly right.
-{BS}
+{B}
 		return( 2 );
 	}
 	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
@@ -3169,7 +3164,7 @@ public:
 		return( 1 );
 	}
 } ldd_y_q_inst;
-{BF}
+{B}
 
 {I 1001000ddddd1001 ld_yp }	LD Rd,Y+		Rd = DS(Y+)
 
@@ -3186,7 +3181,7 @@ public:
 		state->write_reg( arg_d0_d31( opcode ), state->read_data( state->inc_rampy_ry()));
 {BC}
 		Note the timing issues outlined above.
-{BS}
+{B}
 		return( 2 );
 	}
 	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
@@ -3194,7 +3189,7 @@ public:
 		return( 1 );
 	}
 } ld_yp_inst;
-{BF}
+{B}
 
 {I 1001000ddddd1010 ld_ny }	LD Rd,−Y		Rd = DS(-Y)
 
@@ -3211,7 +3206,7 @@ public:
 		state->write_reg( arg_d0_d31( opcode ), state->read_data( state->dec_rampy_ry()));
 {BC}
 		Note the timing issues outlined above.
-{BS}
+{B}
 		return( 2 );
 	}
 	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
@@ -3219,7 +3214,7 @@ public:
 		return( 1 );
 	}
 } ld_ny_inst;
-{BF}
+{B}
 
 
 5.68 LD (LDD) – Load Indirect From Data Space to Register using Z
@@ -3250,7 +3245,7 @@ public:
 			note if the RAM is external to the MCU.
 
 			For the moment, the answer '2' is mostly right.
-{BS}
+{B}
 		return( 2 );
 	}
 	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
@@ -3265,7 +3260,7 @@ public:
 		return( 1 );
 	}
 } ldd_z_q_inst;
-{BF}
+{B}
 
 {I 1001000ddddd0001 ld_zp }	LD Rd,Z+		Rd = DS(Z+)
 
@@ -3282,7 +3277,7 @@ public:
 		state->write_reg( arg_d0_d31( opcode ), state->read_data( state->inc_rampz_rz()));
 {BC}
 		Note the timing issues outlined above.
-{BS}
+{B}
 		return( 2 );
 	}
 	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
@@ -3290,7 +3285,7 @@ public:
 		return( 1 );
 	}
 } ld_zp_inst;
-{BF}
+{B}
 
 {I 1001000ddddd0010 ld_nz }	LD Rd,−Z		Rd = DS(-Z)
 
@@ -3307,7 +3302,7 @@ public:
 		state->write_reg( arg_d0_d31( opcode ), state->read_data( state->dec_rampz_rz()));
 {BC}
 		Note the timing issues outlined above.
-{BS}
+{B}
 		return( 2 );
 	}
 	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
@@ -3315,7 +3310,7 @@ public:
 		return( 1 );
 	}
 } ld_nz_inst;
-{BF}
+{B}
 
 
 5.69 LDI – Load Immediate
@@ -3341,15 +3336,48 @@ public:
 		return( 1 );
 	}
 } andi_inst;
-{BF}
+{B}
 
 
 5.70 LDS – Load Direct from Data Space
 ======================================
 
-{I 1001000ddddd0000 kkkkkkkkkkkkkkkk lds } LDS rd,k		Rd = DS(RAMPD:k)	(Data Space Immediate address)
+{I 1001000ddddd0000 kkkkkkkkkkkkkkkk lds }	LDS rd,k		Rd = DS(RAMPD:k)	(Data Space Immediate address)
 
+{BS}
+//
+//	LDS rd,k		Rd = DS(RAMPD:k)	(Data Space Immediate address)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	1001 000d dddd 0000
+		//	kkkk kkkk kkkk kkkk
+		//
+		static byte ticks[ AVR_Types ] = { 2, 2, 2, 3, 3, 0 };
+	
+		word	clocks,
+			arg;
+	
+		if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
+		state->write_reg( arg_d0_d31( opcode ), state->read_data( get_rampd_const( state->next_opcode())));
+		return( clocks );
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "lds r%d," HEX "%04X", (int)arg_d0_d31( opcode ), (int)state->next_opcode());
+		return( 2 );
+	}
+	//
+	//	Need to override default instruction size for call.
+	//
+	virtual word size( void ) { return( 2 ); }
 
+} lds_inst;
+{B}
+
+5.71 LDS (AVRrc) – Load Direct from Data Space
+==============================================
 
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
