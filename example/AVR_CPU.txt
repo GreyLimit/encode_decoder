@@ -611,14 +611,14 @@ class AVR_CPU : public CPU {
 		//
 		//	Routines to obtain and manipulate the program counter register.
 		//
-		inline dword get_pc( void ) {
-			return( _pc );
-		}
 		inline void set_pc( dword adrs ) {
 			_pc = adrs & _pc_mask;
 		}
-		inline void inc_pc( dword rel ) {
-			_pc = ( _pc + rel ) & _pc_mask;
+		inline dword get_pc( void ) {
+			return( _pc );
+		}
+		inline dword pc_rel( dword rel ) {
+			return( _pc + rel );
 		}
 			
 		//
@@ -877,7 +877,7 @@ class AVR_CPU : public CPU {
 				_skip_next = false;
 				inst = find_instruction( peek_ahead( 0 ));
 				ticks = inst->size();
-				inc_pc( ticks );
+				set_pc( pc_rel( ticks ));
 				//
 				//	The combination of these clock ticks and those
 				//	used by any instruction which sets the _skip_next
@@ -1166,20 +1166,28 @@ class Instruction {
 		//	kkkkkkkkkkkk	= 12 bit signed constant (relative calls/jumps)
 		//
 		//		____ ____ kkkk ____	4
-		//		____ ____ KK__ KKKK	6_w (adiw/sbiw)
-		//		__k_ kk__ ____ _kkk	6_o (YZ offset)
+		//		____ ____ KK__ KKKK	6_w	(adiw/sbiw)
+		//		__k_ kk__ ____ _kkk	6_o	(YZ offset)
+		//		____ _kkk ____ kkkk	7_rc	(See note)
 		//		____ KKKK ____ KKKK	8
 		//		____ kkkk kkkk kkkk	12
+		//
+		//	note:
+		//		This addressing mode specific to AVRtiny/AVRrc MCUs,
+		//		resulting in an 8 bit address range of 0x40 to 0xbf.
+		//
+		//		ADDR[7:0] = (~INST[8], INST[8], INST[10], INST[9], INST[3], INST[2], INST[1], INST[0])
 		//
 		static word arg_imm4( word op ) { return(( op >> 4 ) & 0x000F ); }
 		static word arg_imm6_w( word op ) { return(( op & 0x000F )|(( op >> 2 ) & 0x0030 )); }
 		static word arg_imm6_o( word op ) { return(( op & 0x0007 )|(( op >> 7 ) & 0x0018 )|(( op >> 8 ) & 0x0020 )); }
+		static word arg_imm7_rc( word op ) { return(( op & 0x000F )|(( op >> 5 ) & 0x0030 )|(( op & 0x0100 )?0x0040:0x0080)); }
 		static word arg_imm8( word op ) { return(( op & 0x000F )|(( op >> 4 ) & 0x00F0 )); }
 
 		//
 		//	jjjjjj +16	= 6-bit and 16-bit unsigned constant (absolute PC)
 		//	jjjjjjj		= 7-bit signed constant (relative branching)
-		//	jjjjjjjjjjjj	= 12-bit signed constant (relative PC)
+		//	jjjjjjjjjjjj	= 12-bit signed constant (longer relative PC)
 		//	
 		//		____ ___j jjjj ___j	6 then 16 following.
 		//		____ __jj jjjj j___	7
@@ -1273,15 +1281,16 @@ Instruction *find_instruction( word opcode ) {
 
 Define the STACK(x) macro to assist with adjusting the clock timing
 data.  The macro is defined to adjust the documented timing data leaving
-the base number of clock cycles for the instructions.  Subsequent pushing
+the base number of clock cycles for the instruction.  Subsequent pushing
 or popping the program counter to/from the stack will bring the clock
 count to the correct value.  These clock timings will be specified as
 (for example) 'STACK( 4 )'.
 
-The push and pop routines return an 'additional' clock count from 0 to 2,
-as required by the size of the pc being emulated.
+The push and pop routines return the missing  'additional' clock count of
+0, 1 or 2 as required by the size of the pc being emulated (the number of
+bytes pushed to or popped from the stack).
 
-	{ #define STACK(n) ((n)-2) }
+	{ #define STACK(n) ((n)-1) }
 
 Finally, define a C character string that contains the 'lead-in'
 characters for hexidecimal constant values (when displayed by the
@@ -1572,19 +1581,16 @@ public:
 		//
 		//	0010 00rd dddd rrrr
 		//
-		word	dr, dv,
-			rv,
-			vv;
+		word	dr;
+		byte	bv;
 		bool	n;
 		
-		rv = state->read_reg( arg_r0_r31( opcode ));
-		dv = state->read_reg( dr = arg_d0_d31( opcode ));
-		vv = rv & dv;
+		bv = state->read_reg( dr = arg_d0_d31( opcode )) & state->read_reg( arg_r0_r31( opcode ));
 		state->set_V( false );
-		state->set_N( n = sign( vv ));
+		state->set_N( n = sign( bv ));
 		state->set_S( n );
-		state->set_Z( vv == 0 );
-		state->write_reg( dr, vv );
+		state->set_Z( bv == 0 );
+		state->write_reg( dr, bv );
 		return( 1 );
 	}
 	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
@@ -1610,15 +1616,16 @@ public:
 		//
 		//	0111 KKKK dddd KKKK
 		//
-		word	dr, vv;
+		word	dr;
+		byte	bv;
 		bool	n;
 		
-		vv = state->read_reg( dr = arg_d16_d31( opcode )) & arg_imm8( opcode );
+		bv = state->read_reg( dr = arg_d16_d31( opcode )) & arg_imm8( opcode );
 		state->set_V( false );
-		state->set_N( n = sign( vv ));
+		state->set_N( n = sign( bv ));
 		state->set_S( n );
-		state->set_Z( vv == 0 );
-		state->write_reg( dr, vv );
+		state->set_Z( bv == 0 );
+		state->write_reg( dr, bv );
 		return( 1 );
 	}
 	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
@@ -1629,6 +1636,8 @@ public:
 
 		With 4 or less bits set this is assumed to be an ANDI instruction, with 5
 		or more bits this is assumed to be a CBR instruction.
+
+		This is an arbitrary distinction.
 {B}
 		byte	imm8 = arg_imm8( opcode );
 	
@@ -1759,7 +1768,7 @@ public:
 		//	1111 01jj jjjj jbbb
 		//
 		if(( state->get_sr() & arg_bit_mask( opcode )) == 0 ) {
-			state->inc_pc( arg_branch( opcode ));
+			state->set_pc( state->pc_rel( arg_branch( opcode )));
 			return( 2 );
 		}
 		return( 1 );
@@ -1789,7 +1798,7 @@ public:
 		//	1111 01jj jjjj jbbb
 		//
 		if(( state->get_sr() & arg_bit_mask( opcode )) != 0 ) {
-			state->inc_pc( arg_branch( opcode ));
+			state->set_pc( state->pc_rel( arg_branch( opcode )));
 			return( 2 );
 		}
 		return( 1 );
@@ -2492,7 +2501,7 @@ Three versions of this mnemonic:
 
 	'elpm rN,Z'	As above, but places the data obtained into register N.
 
-	'elpm rN,Z+'	As above, but increments the whole RAMPZ:Z register by 1.
+	'elpm rN,Z+'	As above, but post-increments the whole RAMPZ:Z register by 1.
 
 	
 {I 1001010111011000 elpm_r0 }	ELPM			R0 = PS(RAMPZ:Z)
@@ -2582,7 +2591,7 @@ public:
 		return( clocks );
 	}
 	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "elpm r%d,Z", (int)arg_d0_d31( opcode ));
+		snprintf( buffer, max, "elpm r%d,Z+", (int)arg_d0_d31( opcode ));
 		return( 1 );
 	}
 } elpm_zp_inst;
@@ -3328,14 +3337,14 @@ public:
 		//
 		//	1110 KKKK dddd KKKK
 		//
-		state->write_reg( arg_d16_d31( opcode )), arg_imm8( opcode ));
+		state->write_reg( arg_d16_d31( opcode ), arg_imm8( opcode ));
 		return( 1 );
 	}
 	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
 		snprintf( buffer, max, "ldi r%d," HEX "%02X", (int)arg_d16_d31( opcode ), (int)arg_imm8( opcode ));
 		return( 1 );
 	}
-} andi_inst;
+} ldi_inst;
 {B}
 
 
@@ -3361,7 +3370,7 @@ public:
 			arg;
 	
 		if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
-		state->write_reg( arg_d0_d31( opcode ), state->read_data( get_rampd_const( state->next_opcode())));
+		state->write_reg( arg_d0_d31( opcode ), state->read_data( state->get_rampd_const( state->next_opcode())));
 		return( clocks );
 	}
 	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
@@ -3372,50 +3381,745 @@ public:
 	//	Need to override default instruction size for call.
 	//
 	virtual word size( void ) { return( 2 ); }
-
 } lds_inst;
 {B}
 
 5.71 LDS (AVRrc) – Load Direct from Data Space
 ==============================================
 
+The following AVRtiny instruction overlaps with a number of other
+larger AVR MCU instructions:
 
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	'std_z_q'
+	'std_y_q'
+	'ldd_z_q'
+	'ldd_y_q'
+	
+The instruction detail and implementation below has (for the moment) been
+set to be ignored.
 
-{I 0000000000000000 nop			} NOP						(No Operation)
-	static word op_nop( word opcode, AVR_CPU *state ) {
-	{	//
-	{	//	0000 0000 0000 0000
-	{	//
+{BC}
+	{I 10100kkkddddkkkk lds_AVRrc }
+
+	//
+	//	LDS rd,k		Rd = DS(k)	(Data Space Immediate address)
+	//
+	class : public Instruction {
+	public:
+		virtual word execute( word opcode, AVR_CPU *state ) {
+			//
+			//	1010 0kkk dddd kkkk
+			//
+			static byte ticks[ AVR_Types ] = { 0, 0, 0, 0, 0, 2 };
+		
+			word	clocks,
+				arg;
+		
+			if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
+			state->write_reg( arg_d16_d31( opcode ), state->read_data( arg_imm7_rc( opcode )));
+			return( clocks );
+		}
+		virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+			snprintf( buffer, max, "lds r%d," HEX "%02X", (int)arg_d0_d31( opcode ), (int)arg_imm7_rc( opcode ));
+			return( 1 );
+		}
+	} lds_inst;
+{B}
+
+5.72 LPM – Load Program Memory
+==============================
+
+Three versions of this mnemonic:
+
+	'lpm'		Retrieves a byte of program flash memory into register r0
+			where Z specifies the *byte oriented* address of the
+			data required (the flash is word addressed by the program
+			counter).
+
+	'lpm rN,Z'	As above, but places the data obtained into register N.
+
+	'lpm rN,Z+'	As above, but post-increments the Z register by 1.
+
+{I 1001010111001000 lpm_r0 }	LPM			R0 = PS(Z)
+
+{BS}
+//
+//	LPM			R0 = PS(Z)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	1001 0101 1100 1000
+		//
+		static byte ticks[ AVR_Types ] = { 3, 3, 3, 3, 3, 0 };
+		
+		word	clocks,
+			data,
+			adrs;
+
+		if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
+		adrs = state->get_rampz_rz();
+		data = state->read_flash( adrs >> 1 );
+		state->write_reg( 0, (( adrs & 1 )? msb( data ): lsb( data )));
+		return( clocks );
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "lpm" );
 		return( 1 );
 	}
+} lpm_r0_inst;
+{B}
 
-{I 00000001DDDDRRRR movw		} MOVW Rd+1:Rd,Rr+1:Rr	Rd+1:Rd = Rr+1:Rr	(Move register pair)
-	static word op_movw( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
 
-{I 00000010ddddrrrr muls		} MULS Rd,Rr		R1:R0 = Rd x Rr		(signed = signed x signed)
-	static word op_muls( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
+{I 1001000ddddd0100 lpm_z }	LPM Rd,Z		Rd = PS(Z)
 
-{I 000000110ddd0rrr mulsu		} MULSU Rd,Rr		R1:R0 = Rd x Rr		(signed = signed x unsigned)
-	static word op_mulsu( word opcode, AVR_CPU *state ) {
-		return( 0 );
+{BS}
+//
+//	LPM Rd,Z		Rd = PS(Z)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	1001 000d dddd 0100
+		//
+		static byte ticks[ AVR_Types ] = { 3, 3, 3, 3, 3, 0 };
+		
+		word	clocks,
+			data,
+			adrs;
+
+		if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
+		adrs = state->get_rz();
+		data = state->read_flash( adrs >> 1 );
+		state->write_reg( arg_d0_d31( opcode ), (( adrs & 1 )? msb( data ): lsb( data )));
+		return( clocks );
 	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "lpm r%d,Z", (int)arg_d0_d31( opcode ));
+		return( 1 );
+	}
+} lpm_z_inst;
+{B}
+
+{I 1001000ddddd0101 lpm_zp }	LPM Rd,Z+		Rd = PS(Z+)
+
+{BS}
+//
+//	LPM Rd,Z+		Rd = PS(Z+)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	1001 000d dddd 0101
+		//
+		static byte ticks[ AVR_Types ] = { 3, 3, 3, 3, 3, 0 };
+		
+		word	clocks,
+			data,
+			adrs;
+
+		if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
+		adrs = state->inc_rz();
+		data = state->read_flash( adrs >> 1 );
+		state->write_reg( arg_d0_d31( opcode ), (( adrs & 1 )? msb( data ): lsb( data )));
+		return( clocks );
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "lpm r%d,Z+", (int)arg_d0_d31( opcode ));
+		return( 1 );
+	}
+} lpm_zp_inst;
+{B}
+
+
+5.73 LSL – Logical Shift Left
+=============================
+
+See section 5.2. ADD – Add without Carry.
+
+
+
+5.74 LSR – Logical Shift Right
+==============================
+
+{I 1001010ddddd0110 lsr }	LSR Rd		Rd = Rd >> 1		(Logical right shift)
+
+{BS}
+//
+//	LSR Rd		Rd = Rd >> 1		(Logical right shift)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	1001 010d dddd 0110
+		//
+		byte	dr, dv,		// Destination register and value
+			bv;		// Byte result
+		bool	c;
+		
+		bv = ( dv = state->read_reg( dr = arg_d0_d31( opcode ))) >> 1;
+		state->set_C( c = odd( dv ));
+		state->set_N( false );	// n = 0
+		state->set_V( c );	// v = n ^ c = 0 ^ c = c
+		state->set_S( c );	// s = n ^ v = 0 ^ v = 0 ^ c = c
+		state->set_Z( bv == 0 );
+		state->write_reg( dr, bv );
+		return( 1 );
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "lsr r%d", (int)arg_d0_d31( opcode ));
+		return( 1 );
+	}
+} lsr_inst;
+{B}
+
+
+
+5.75 MOV – Copy Register
+========================
+
+{I 001011rdddddrrrr mov }	MOV Rd,Rr		Rd = Rr
+
+{BS}
+//
+//	MOV Rd,Rr		Rd = Rr
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	0010 11rd dddd rrrr
+		//
+		state->write_reg( arg_d0_d31( opcode ), state->read_reg( arg_r0_r31( opcode )));
+		return( 1 );
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "mov r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
+		return( 1 );
+	}
+} mov_inst;
+{B}
+
+
+
+5.76 MOVW – Copy Register Word
+==============================
+
+
+{I 00000001DDDDRRRR movw }	MOVW Rd+1:Rd,Rr+1:Rr	Rd+1:Rd = Rr+1:Rr	(Move register pair)
+
+{BS}
+//
+//	MOVW Rd+1:Rd,Rr+1:Rr	Rd+1:Rd = Rr+1:Rr	(Move register pair)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	0000 0001 DDDD RRRR
+		//
+		static byte ticks[ AVR_Types ] = { 0, 1, 1, 1, 1, 0 };
+		
+		word	clocks,
+			dr, rr;
+		
+		if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
+		dr = arg_d1d0_d31d30( opcode );
+		rr = arg_r1r0_r31r30( opcode );
+		state->write_reg( dr, state->read_reg( rr ));
+		state->write_reg( dr+1, state->read_reg( rr+1 ));
+		return( clocks );
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		word	dr, rr;
+		
+		dr = arg_d1d0_d31d30( opcode );
+		rr = arg_r1r0_r31r30( opcode );
+		snprintf( buffer, max, "movw r%d:r%d,r%d:r%d", (int)(dr+1), (int)dr, (int)(rr+1), (int)rr );
+		return( 1 );
+	}
+} movw_inst;
+{B}
+
+
+5.77 MUL – Multiply Unsigned
+============================
+
+{I 100111rdddddrrrr mul }	MUL Rd,Rr		R1:R0 = Rr x Rd		(unsigned = unsigned x unsigned)
+
+{BS}
+//
+//	MUL Rd,Rr		R1:R0 = Rr x Rd		(unsigned = unsigned x unsigned)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	1001 11rd dddd rrrr
+		//
+		static byte ticks[ AVR_Types ] = { 0, 0, 2, 2, 2, 0 };
+		
+		word	clocks,
+			result;
+		byte	dv, rv;
+		
+		if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
+		dv = state->read_reg( arg_d0_d31( opcode ));
+		rv = state->read_reg( arg_r0_r31( opcode ));
+		result = dv * rv;
+		state->set_C( signw( result ));
+		state->set_Z( result == 0 );
+		state->write_reg( 1, msb( result ));
+		state->write_reg( 0, lsb( result ));
+		return( clocks );
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "mul r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
+		return( 1 );
+	}
+} mul_inst;
+{B}
+
+
+5.78 MULS – Multiply Signed
+===========================
+
+{I 00000010ddddrrrr muls}	MULS Rd,Rr		R1:R0 = Rd x Rr		(signed = signed x signed)
+
+{BS}
+//
+//	MULS Rd,Rr		R1:R0 = Rd x Rr		(signed = signed x signed)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	1001 11rd dddd rrrr
+		//
+		static byte ticks[ AVR_Types ] = { 0, 0, 2, 2, 2, 0 };
+		
+		word	clocks,
+			result;
+		byte	dv, rv;
+		bool	ds, rs;
+		
+		if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
+		if(( ds = sign( dv = state->read_reg( arg_d0_d31( opcode ))))) dv = negate( dv );
+		if(( rs = sign( rv = state->read_reg( arg_r0_r31( opcode ))))) rv = negate( rv );
+		result = dv * rv;
+		if( ds ^ rs ) result = negatew( result );
+		state->set_C( signw( result ));
+		state->set_Z( result == 0 );
+		state->write_reg( 1, msb( result ));
+		state->write_reg( 0, lsb( result ));
+		return( clocks );
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "muls r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
+		return( 1 );
+	}
+} muls_inst;
+{B}
+
+
+5.79 MULSU – Multiply Signed with Unsigned
+==========================================
+
+{I 000000110ddd0rrr mulsu }	MULSU Rd,Rr		R1:R0 = Rd x Rr		(signed = signed x unsigned)
+
+{BS}
+//
+//	MULSU Rd,Rr		R1:R0 = Rd x Rr		(signed = signed x unsigned)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	0000 0011 0ddd 0rrr
+		//
+		static byte ticks[ AVR_Types ] = { 0, 0, 2, 2, 2, 0 };
+		
+		word	clocks,
+			result;
+		byte	dv, rv;
+		bool	ds;
+		
+		if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
+		if(( ds = sign( dv = state->read_reg( arg_d16_d23( opcode ))))) dv = negate( dv );
+		rv = state->read_reg( arg_r16_r23( opcode ));
+		result = dv * rv;
+		if( ds ) result = negatew( result );
+		state->set_C( signw( result ));
+		state->set_Z( result == 0 );
+		state->write_reg( 1, msb( result ));
+		state->write_reg( 0, lsb( result ));
+		return( clocks );
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "muls r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
+		return( 1 );
+	}
+} mulsu_inst;
+{B}
+
+
+5.80 NEG – Two’s Complement
+===========================
+
+{I 1001010ddddd0001 neg }	NEG Rd		Rd = -Rd		(Twos complement)
+
+{BS}
+//
+//	NEG Rd		Rd = -Rd		(Twos complement)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	1001 010d dddd 0001
+		//
+		byte	dr, dv,
+			bv;
+		bool	n, v;
+		
+		bv = 0 - ( dv = state->read_reg( dr = arg_d0_d31( opcode )));
+		state->set_H( borrow( 0, dv ));
+		state->set_V( v = ( bv == 0x80 ));
+		state->set_N( n = sign( bv ));
+		state->set_S( n ^ v );
+		state->set_C( dv != 0 );
+		state->set_Z( bv == 0 );
+		return( 1 );
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "neg r%d", (int)arg_d0_d31( opcode ));
+		return( 1 );
+	}
+} neg_inst;
+{B}
+
+
+5.81 NOP – No Operation
+=======================
+
+{I 0000000000000000 nop }	NOP					(No Operation)
+
+{BS}
+//
+//	NOP					(No Operation)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	0000 0000 0000 0000
+		//
+		return( 1 );
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "nop" );
+		return( 1 );
+	}
+} nop_inst;
+{B}
+
+
+5.82 OR – Logical OR
+====================
+
+{I 001010rdddddrrrr or }	OR Rd,Rr		Rd = Rd | Rr
+
+{BS}
+//
+//	OR Rd,Rr		Rd = Rd | Rr
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	0010 10rd dddd rrrr
+		//
+		word	dr;
+		byte	bv;
+		bool	n;
+		
+		bv = state->read_reg( dr = arg_d0_d31( opcode )) | state->read_reg( arg_r0_r31( opcode ));
+		state->set_V( false );
+		state->set_N( n = sign( bv ));
+		state->set_S( n );
+		state->set_Z( bv == 0 );
+		state->write_reg( dr, bv );
+		return( 1 );
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "or r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
+		return( 1 );
+	}
+} or_inst;
+{B}
+
+
+
+5.83 ORI – Logical OR with Immediate
+====================================
+
+{I 0110KKKKddddKKKK ori }	ORI Rd,K		Rd = Rd | K		(Or with 8-bit immediate. Also: SBR Rd,K)
+
+{BS}
+//
+//	ORI Rd,K		Rd = Rd | K		(Or with 8-bit immediate. Also: SBR Rd,K)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	0110 KKKK dddd KKKK
+		//
+		word	dr;
+		byte	bv;
+		bool	n;
+		
+		bv = state->read_reg( dr = arg_d16_d31( opcode )) | arg_imm8( opcode );
+		state->set_V( false );
+		state->set_N( n = sign( bv ));
+		state->set_S( n );
+		state->set_Z( bv == 0 );
+		state->write_reg( dr, bv );
+		return( 1 );
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+{BC}
+	Note:	This instruction (ORI) is aliased as 'Set bits in Register' (SBR Rd,K).
+		The disassembly routine will note this and display one version
+		based on the number of bits set in the constant argument supplied.
+
+		With 4 or less bits set this is assumed to be an SBR instruction, with 5
+		or more bits this is assumed to be a ORI instruction.
+
+		This is an arbitrary distinction.
+{B}
+		byte	imm8 = arg_imm8( opcode );
+	
+		if( count_ones( imm8 ) < 4 ) {
+			snprintf( buffer, max, "sbr r%d," HEX "%02X", (int)arg_d16_d31( opcode ), (int)imm8);
+		}
+		else {
+			snprintf( buffer, max, "ori r%d," HEX "%02X", (int)arg_d16_d31( opcode ), (int)imm8);
+		}
+		return( 1 );
+	}
+} ori_inst;
+{B}
+
+
+5.84 OUT – Store Register to I/O Location
+=========================================
+
+{I 10111aadddddaaaa out }	OUT a,Rd		IO(a) = Rd		(Write register to IO address)
+
+{BS}
+//
+//	OUT a,Rd		IO(a) = Rd		(Write register to IO address)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	1011 1aad dddd aaaa
+		//
+		state->write_io( arg_a0_a63( opcode ), state->read_reg( arg_d0_d31( opcode )));
+		return( 1 );
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "out %d,r%d", (int)arg_a0_a63( opcode ), (int)arg_d0_d31( opcode ));
+		return( 1 );
+	}
+} out_inst;
+{B}
+
+
+5.85 POP – Pop Register from Stack
+==================================
+
+{I 1001000ddddd1111 pop }	POP Rd		Rd = DS(+STACK)
+
+{BS}
+//
+//	POP Rd		Rd = DS(+STACK)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	1001 000d dddd 1111
+		//
+		static byte ticks[ AVR_Types ] = { 2, 2, 2, 2, 2, 3 };
+		
+		state->push_byte( state->read_reg( arg_d0_d31( opcode )));
+		return( ticks[ state->mcu_type()]);
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "pop r%d", (int)arg_d0_d31( opcode ));
+		return( 1 );
+	}
+} pop_inst;
+{B}
+
+
+5.86 PUSH – Push Register on Stack
+==================================
+
+{I 1001001ddddd1111 push }	PUSH Rd		DS(STACK-) = Rd
+
+{BS}
+//
+//	PUSH Rd		DS(STACK-) = Rd
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	1001 001d dddd 1111
+		//
+		static byte ticks[ AVR_Types ] = { 2, 2, 2, 1, 1, 1 };
+		
+		state->write_reg( arg_d0_d31( opcode ), state->pop_byte());
+		return( ticks[ state->mcu_type()]);
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "push r%d", (int)arg_d0_d31( opcode ));
+		return( 1 );
+	}
+} push_inst;
+{B}
+
+
+5.87 RCALL – Relative Call to Subroutine
+========================================
+
+{I 1101jjjjjjjjjjjj rcall }	RCALL j		DS(STACK-) = PC, PC = PC + j (Relative call, j is signed 12 bit immediate)
+
+{BS}
+//
+//	RCALL j		DS(STACK-) = PC, PC = PC + j (Relative call, j is signed 12 bit immediate)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	1101 jjjj jjjj jjjj
+		//
+		static byte ticks[ AVR_Types ] = { STACK( 3 ), STACK( 3 ), STACK( 3 ), STACK( 2 ), STACK( 2 ), STACK( 3 )};
+
+		return( ticks[ state->mcu_type()] + state->push_pc( state->pc_rel( arg_relative( opcode ))));
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "rcall %d", (int)arg_relative( opcode ));
+		return( 1 );
+	}
+} rcall_inst;
+{B}
+
+
+5.88 RET – Return from Subroutine
+=================================
+
+{I 1001010100001000 ret }	RET			PC = DS(+STACK)		(Pops 2 or 3 bytes as appropriate to AVR architecture)
+
+{BS}
+//
+//	RET			PC = DS(+STACK)		(Pops 2 or 3 bytes as appropriate to AVR architecture)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	1001 0101 0000 1000
+		//
+		static byte ticks[ AVR_Types ] = { STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 6 )};
+
+		return( ticks[ state->mcu_type()] + state->pop_pc());
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "ret" );
+		return( 1 );
+	}
+} ret_inst;
+{B}
+
+
+5.89 RETI – Return from Interrupt
+=================================
+
+{I 1001010100011000 reti }	RETI			PC = DS(+STACK),I = 1
+
+{BS}
+//
+//	RETI			PC = DS(+STACK),I = 1
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	1001 0101 0000 1000
+		//
+		static byte ticks[ AVR_Types ] = { STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 6 )};
+
+		state->set_I( true );
+		return( ticks[ state->mcu_type()] + state->pop_pc());
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "reti" );
+		return( 1 );
+	}
+} reti_inst;
+{B}
+
+
+5.90 RJMP – Relative Jump
+=========================
+
+{I 1100jjjjjjjjjjjj rjmp }	RJMP j		PC = PC + j		(Relative jump, j is signed 12 bit immediate)
+
+{BS}
+//
+//	RJMP j		PC = PC + j		(Relative jump, j is signed 12 bit immediate)
+//
+class : public Instruction {
+public:
+	virtual word execute( word opcode, AVR_CPU *state ) {
+		//
+		//	1101 jjjj jjjj jjjj
+		//
+		state->set_pc( state->pc_rel( arg_relative( opcode )));
+		return( 2 );
+	}
+	virtual word disassemble( word opcode, AVR_CPU *state, char *buffer, int max ) {
+		snprintf( buffer, max, "rjmp %d", (int)arg_relative( opcode ));
+		return( 1 );
+	}
+} rjmp_inst;
+{B}
+
+
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 {I 000010rdddddrrrr sbc			} SBC Rd,Rr		Rd = Rd - Rr - C
 	static word op_sbc( word opcode, AVR_CPU *state ) {
@@ -3424,16 +4128,6 @@ public:
 
 {I 000110rdddddrrrr sub			} SUB Rd,Rr		Rd = Rd - Rr
 	static word op_sub( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
-
-{I 001010rdddddrrrr or			} OR Rd,Rr		Rd = Rd | Rr
-	static word op_or( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
-
-{I 001011rdddddrrrr mov			} MOV Rd,Rr		Rd = Rr
-	static word op_mov( word opcode, AVR_CPU *state ) {
 		return( 0 );
 	}
 
@@ -3446,33 +4140,6 @@ public:
 	static word op_subi( word opcode, AVR_CPU *state ) {
 		return( 0 );
 	}
-
-{I 0110KKKKddddKKKK ori			} ORI Rd,K		Rd = Rd | K		(Or with 8-bit immediate. Also: SBR Rd,K)
-	static word op_ori( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
-
-{I 1001010111001000 lpm_r0		} LPM			R0 = PS(Z)
-	static word op_lpm_r0( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
-
-{I 1001000ddddd0100 lpm_z		} LPM Rd,Z		Rd = PS(Z)
-	static word op_lpm_z( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
-
-{I 1001000ddddd0101 lpm_zp		} LPM Rd,Z+		Rd = PS(Z+)
-	static word op_lpm_zp( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
-
-
-{I 1001000ddddd1111 pop			} POP Rd		Rd = DS(+STACK)
-	static word op_pop( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
-
 
 {I 1001001ddddd0000 kkkkkkkkkkkkkkkk sts } STS k,rd		DS(RAMPD:k) = Rd
 	static word op_sts( word opcode, AVR_CPU *state ) {
@@ -3496,11 +4163,6 @@ public:
 
 {I 1001001ddddd1110 st_nx		} ST -X,Rd		DS(-X) = Rd
 	static word op_st_nx( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
-
-{I 1001001ddddd1111 push		} PUSH Rd		DS(STACK-) = Rd
-	static word op_push( word opcode, AVR_CPU *state ) {
 		return( 0 );
 	}
 
@@ -3558,16 +4220,6 @@ Note:	The "BSET" instruction is a core version of the eight "SE?" instructions,
 		1001010001101000 set
 		1001010001111000 sei
 
-{I 1001010100001000 ret			} RET			PC = DS(+STACK)		(Pops 2 or 3 bytes as appropriate to AVR architecture)
-	static word op_ret( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
-
-{I 1001010100011000 reti		} RETI			PC = DS(+STACK),I = 1
-	static word op_reti( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
-
 {I 1001010110001000 sleep		} SLEEP						(Put CPU into sleep mode)
 	static word op_sleep( word opcode, AVR_CPU *state ) {
 		return( 0 );
@@ -3585,18 +4237,8 @@ Note:	The "BSET" instruction is a core version of the eight "SE?" instructions,
 	}
 
 
-{I 1001010ddddd0001 neg			} NEG Rd		Rd = -Rd		(Twos complement)
-	static word op_neg( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
-
 {I 1001010ddddd0010 swap		} SWAP Rd		Rd[0:3] <-> Rd[7:4]	(Swap nibbles in Rd)
 	static word op_swap( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
-
-{I 1001010ddddd0110 lsr			} LSR Rd		Rd = Rd >> 1		(Logical right shift)
-	static word op_lsr( word opcode, AVR_CPU *state ) {
 		return( 0 );
 	}
 
@@ -3624,27 +4266,6 @@ Note:	The "BSET" instruction is a core version of the eight "SE?" instructions,
 	static word op_sbis( word opcode, AVR_CPU *state ) {
 		return( 0 );
 	}
-
-{I 100111rdddddrrrr mul			} MUL Rd,Rr		R1:R0 = Rr x Rd		(unsigned = unsigned x unsigned)
-	static word op_mul( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
-
-{I 10111aadddddaaaa out			} OUT a,Rd		IO(a) = Rd		(Read register from IO address)
-	static word op_out( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
-
-{I 1100jjjjjjjjjjjj rjmp		} RJMP j		PC = PC + j		(Relative jump, j is signed 12 bit immediate)
-	static word op_rjmp( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
-
-{I 1101jjjjjjjjjjjj rcall		} RCALL j		DS(STACK-) = PC, PC = PC + j (Relative call, j is signed 12 bit immediate)
-	static word op_rcall( word opcode, AVR_CPU *state ) {
-		return( 0 );
-	}
-
 
 {I 1111110ddddd0bbb sbrc		} SBRC Rd,b		Skip next if Rd[b] == 0
 	static word op_sbrc( word opcode, AVR_CPU *state ) {
