@@ -317,7 +317,8 @@ FINISH {
 /*
  *	Define the output streams for the program result.
  */
-static char		*output_base_name = NULL,
+static char		*input_source_file = NULL,
+			*output_base_name = NULL,
 			*output_source_name = NULL,
 			*output_header_name = NULL;
 static FILE		*output_source = NULL,
@@ -781,7 +782,7 @@ static bool process( int line, char *input, char *comment ) {
 			 */
 			if( output_target != SOURCE_TARGET ) {
 				output_target = SOURCE_TARGET;
-				fprintf( output_source, "#line %d \"%s\"\n", line, output_base_name );
+				fprintf( output_source, "#line %d \"%s\"\n", line, input_source_file );
 			}
 			fprintf( output_source, "%s\n", input );
 			break;
@@ -794,7 +795,7 @@ static bool process( int line, char *input, char *comment ) {
 			 */
 			if( output_target != SOURCE_TARGET ) {
 				output_target = SOURCE_TARGET;
-				fprintf( output_source, "#line %d \"%s\"\n", line, output_base_name );
+				fprintf( output_source, "#line %d \"%s\"\n", line, input_source_file );
 			}
 			fprintf( output_source, "\n" );
 			break;
@@ -818,7 +819,7 @@ static bool process( int line, char *input, char *comment ) {
 			 */
 			if( output_target != HEADER_TARGET ) {
 				output_target = HEADER_TARGET;
-				fprintf( output_header, "#line %d \"%s\"\n", line, output_base_name );
+				fprintf( output_header, "#line %d \"%s\"\n", line, input_source_file );
 			}
 			fprintf( output_header, "%s\n", input );
 			break;
@@ -1365,6 +1366,7 @@ int main( int argc, char *argv[]) {
 			/*
 			 *	Reading from STDIN
 			 */
+			input_source_file = "stdin";
 			input = stdin;
 			output_base_name = NULL;
 			break;
@@ -1375,14 +1377,15 @@ int main( int argc, char *argv[]) {
 			/*
 			 *	File name supplied
 			 */
-			if(( input = fopen( argv[ 1 ], "r" )) == NULL ) {
-				fprintf( stderr, "Unable to open file '%s'\n", argv[ 1 ]);
+			input_source_file = argv[ 1 ];
+			if(( input = fopen( input_source_file, "r" )) == NULL ) {
+				fprintf( stderr, "Unable to open file '%s'\n", input_source_file );
 				return( 1 );
 			}
 			/*
 			 *	Set up for finding out if we are C or C++
 			 */
-			if(( p = strchr(( output_base_name = strdup( argv[ 1 ])), PERIOD ))) {
+			if(( p = strchr(( output_base_name = strdup( input_source_file )), PERIOD ))) {
 				/*
 				 *	Blast the dot away as there is one.
 				 */
@@ -1482,7 +1485,7 @@ int main( int argc, char *argv[]) {
 						 */
 						if( output_target != SOURCE_TARGET ) {
 							output_target = SOURCE_TARGET;
-							fprintf( output_source, "#line %d \"%s\"\n", line, output_base_name );
+							fprintf( output_source, "#line %d \"%s\"\n", line, input_source_file );
 						}
 						fprintf( output_source, "%s\n", buffer );
 						break;
@@ -1506,7 +1509,7 @@ int main( int argc, char *argv[]) {
 						 */
 						if( output_target != HEADER_TARGET ) {
 							output_target = HEADER_TARGET;
-							fprintf( output_header, "#line %d \"%s\"\n", line, output_base_name );
+							fprintf( output_header, "#line %d \"%s\"\n", line, input_source_file );
 						}
 						fprintf( output_header, "%s\n", buffer );
 						break;
@@ -1658,7 +1661,7 @@ int main( int argc, char *argv[]) {
 	line = 0;
 	while( finish_data ) {
 		if( finish_data->line > line ) {
-			fprintf( output_source, "#line %d \"%s\"\n", finish_data->line, output_base_name );
+			fprintf( output_source, "#line %d \"%s\"\n", finish_data->line, input_source_file );
 			line = finish_data->line + 1;
 		}
 		fprintf( output_source, "%s\n", finish_data->data );
