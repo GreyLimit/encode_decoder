@@ -67,15 +67,18 @@ decoder.
 //
 
 //
-//	Include standard stuff.
-//
-#include <stdlib.h>
-
-//
 //	Include the definitions required for the
 //	table to compile.
 //
 #include "AVR_CPU.h"
+
+//
+//	Actually include the Programmer definitions
+//	(rather than just pre-declaring the class
+//	as the header file does).
+//
+#include "Programmer.h"
+
 {B}
 
 The Decode Definitions File
@@ -92,13 +95,17 @@ state record.
 //	---------
 //
 
-#ifndef _AVR_DECODER_H_
-#define _AVR_DECODER_H_
+#ifndef _AVR_CPU_H_
+#define _AVR_CPU_H_
 
 //
-//	Include system definitions we need.
+//	Pre-declare the cyclicly defined classes.
 //
-#include <cstdio>
+class Instruction;
+class Programmer;
+class AVR_CPU;
+
+
 
 //
 //	Include the base set of definitions (types, constants etc).
@@ -114,20 +121,16 @@ state record.
 #include "Clock.h"
 #include "CPU.h"
 #include "Symbols.h"
+#include "Fuses.h"
+#include "Validation.h"
+#include "DeviceRegister.h"
+#include "Coverage.h"
+#include "Pin.h"
 
 //
-//	Also need to be able to raise software exceptions
+//	Also need to be able to raise exceptions and reports
 //
-#include "Exception.h"
-
-//
-//	Pre-Declare the Instruction and AVR_CPU classes.
-//
-//	This is needed as the Instruction and AVR_CPU classes
-//	refer to each other.
-//
-class Instruction;
-class AVR_CPU;
+#include "Reporter.h"
 
 //
 //	Declare the look up function as defined at the end of
@@ -139,36 +142,9 @@ extern Instruction *find_instruction( word opcode );
 
 {BH}
 //
-//	Enumerate the various AVR MCUs we shall aim
-//	to simulate.
+//	Bring in AVR Definitions
 //
-typedef enum {
-	//
-	//	Define the different AVR architectures
-	//			
-	AVR_MCU		= 0,	// "AVR"	Original instruction set from 1995.
-	
-	AVRe_MCU	= 1,	// "megaAVR"	Multiply (xMULxx), Move Word (MOVW),
-				//		and enhanced Load Program Memory (LPM)
-				//		added to the AVR instruction set.
-				
-	AVRet_MCU	= 2,	// "tinyAVR"	Multiply not included, but else equal
-				//		to AVRe for megaAVR ("et" is my label
-				//		to apply to this option).
-				
-	AVRxm_MCU	= 3,	// "XMEGA"	The Read Modify Write (RMW) and
-				//		DES encryption instructions are
-				//		unique to this version.
-				
-	AVRxt_MCU	= 4,	// "AVR"	Base AVR from 2016 and onwards.
-	
-	AVRrc_MCU	= 5	// "tinyAVR"	The Reduced Core AVR CPU.
-} AVR_Type;
-
-//
-//	Define the number of types we will support (as above).
-//
-const byte AVR_Types = 6;
+#include "AVR_Const.h"
 {B}
 
 Define the class used to hold the AVR CPU state information, and
@@ -179,8 +155,63 @@ executed.
 //
 //	The AVR CPU State
 //
-class AVR_CPU : public CPU {
+class AVR_CPU : public CPU, Notification, Tick {
+	public:
+		//
+		//	Define the number of registers which the
+		//	architecture intrinsically uses.  These are
+		//	the General Purpose (GP) Registers.
+		//
+		static const word GPRegisters = 32;
+
+		//
+		//	The General Purpose registers are addressed
+		//	externally via the Device register mechanism
+		//	using an identifier equivalent to their individual
+		//	register numbers.
+		//
+		static const word GPR0 = 0;
+		//
+		//	... through to ...
+		//
+		static const word GPR31 = 31;	// GPRegisters-1
+
+		//
+		//	Define the Device Register identifiers for all the
+		//	IO based registers that the CPU uses.  The numbers
+		//	are arbitrary and do not specify the actual IO port
+		//	number they might be located at.
+		//
+		static const word SPH	= GPRegisters + 0;
+		static const word SPL	= GPRegisters + 1;
+		static const word SREG	= GPRegisters + 2;
+		static const word RAMD	= GPRegisters + 3;
+		static const word RAMX	= GPRegisters + 4;
+		static const word RAMY	= GPRegisters + 5;
+		static const word RAMZ	= GPRegisters + 6;
+		static const word EIND	= GPRegisters + 7;
+		static const word MCUCR	= GPRegisters + 8;
+		static const word MCUSR	= GPRegisters + 9;
+		static const word WDTCSR = GPRegisters + 10;
+
+		//
+		//	Define clock IDs we might use
+		//
+		static const word System_Clock = 0;
+		static const word WDT_Clock = 1;
+
+		//
+		//	The list of interrupt numbers the AVR CPU generates
+		//	directly.
+		//
+		static const byte WDT_IRQ_Number = 7;
+		
 	private:
+		//
+		//	Initialisation flag.
+		//
+		bool	_constructed;
+		
 		//
 		//	Value Manipulation
 		//	------------------
@@ -188,10 +219,10 @@ class AVR_CPU : public CPU {
 		//	Routines to combine byte, word values up to word
 		//	and dword, and split words and dwords down.
 		//
-		static inline byte high( word v ) { return( v >> 8 ); }
-		static inline word highw( dword v ) { return( v >> 16 ); }
-		static inline byte low( word v ) { return( v ); }
-		static inline word loww( dword v ) { return( v ); }
+		static inline byte high( word v ) { return((byte)( v >> 8 )); }
+		static inline word highw( dword v ) { return((word)( v >> 16 )); }
+		static inline byte low( word v ) { return( (byte)v ); }
+		static inline word loww( dword v ) { return( (word)v ); }
 		static inline word combine( byte h, byte l ) { return( ((word)h << 8 ) | (word)l ); }
 		static inline dword combinew( word h, word l ) { return( ((dword)h << 16 ) | (dword)l ); }
 
@@ -201,14 +232,20 @@ class AVR_CPU : public CPU {
 		//
 		
 		//
-		//	Exception handler.
+		//	Reporter handler.
 		//
-		Exception	*_exception;
+		Reporter	*_reporter;
+		int		_instance;
+
+		//
+		//	Tracking of coverage
+		//
+		Coverage	*_track;
 
 		//
 		//	Which CPU are we?
 		//
-		AVR_Type	_cpu;
+		AVR_InstSet	_cpu;
 
 		//
 		//	Program address size in BITS and the number of bytes
@@ -218,19 +255,26 @@ class AVR_CPU : public CPU {
 				_pas_bytes;
 		
 		//
-		//	Where do we find the program to execute?
+		//	Where do we find the program to execute and how do we
+		//	access/modify it?
 		//
 		Flash		*_program;
+		Programmer	*_programmer;
+		Fuses		*_fuses;
 
 		//
 		//	The various element of memory:
 		//
 		Memory		*_data,
-				*_regs,
-				*_io,
-				*_ext_io,
-				*_sram;
+				*_ports;
+		word		_reg[ GPRegisters ];
 
+		//
+		//	The GPIO facilities.
+		//
+		Pin		**_pin;
+		word		_pins;
+		
 		//
 		//	Where we collect and manage IRQs.
 		//
@@ -261,109 +305,183 @@ class AVR_CPU : public CPU {
 				_pc_mask;
 
 		//
+		//	Define the address of the boot area.
+		//
+		dword		_boot_area;
+
+		//
+		//	Where is the IRQ vector located?
+		//
+		dword		_irq_vector;
+
+		//
 		//	The Status Register
 		//	===================
 		//
-		//	Define the IO port where the status register
-		//	is found.
+		byte		_sreg;
 		//
-		static const word status_register = 0x3F;
+		//	Define Status register individual bit names
 		//
-		//	Pointer to the Status Register location.
-		//
-		byte		*_sr;
+		static const byte sreg_I = BIT( byte, 7 );
+		static const byte sreg_T = BIT( byte, 6 );
+		static const byte sreg_H = BIT( byte, 5 );
+		static const byte sreg_S = BIT( byte, 4 );
+		static const byte sreg_V = BIT( byte, 3 );
+		static const byte sreg_N = BIT( byte, 2 );
+		static const byte sreg_Z = BIT( byte, 1 );
+		static const byte sreg_C = BIT( byte, 0 );
 
 		//
-		//	The Stack Pointer (effectively 16 bit).
-		//	=======================================
+		//	The Stack Pointer
+		//	=================
 		//
-		//	Define the IO ports where the stack pointer
-		//	is found.
-		//
-		static const word stack_pointer_h = 0x3E;
-		static const word stack_pointer_l = 0x3D;
-		//
-		//	Pointers to the Stack Pointer individual locations.
-		//
-		byte		*_sp_h,
-				*_sp_l;
-		//
-		//	Private Stack Pointer access routines.
-		//
-		inline word get_SP( void ) { return( combine( *_sp_h, *_sp_l )); }
-		inline void set_SP( word sp ) { *_sp_l = low( sp ); *_sp_h = high( sp ); }
+		word		_sp;
 
 		//
 		//	The Extended Indirect Register
 		//	==============================
 		//
-		static const word extended_indirect = 0x3C;
-		//
-		//	EIND access pointer.
-		//
-		byte		*_eind;
+		byte		_eind;
 
 		//
-		//	Extended memory RAM pointer registers
+		//	Extended RAM registers
+		//	======================
+		//
+		byte		_ram_z,
+				_ram_y,
+				_ram_x,
+				_ram_d;
+
+		//
+		//	The MCU Control Register
+		//	========================
+		//
+		byte		_mcucr;
+		//
+		static const byte mcucr_BODS = BIT( byte, 6 );
+		static const byte mcucr_BODSE = BIT( byte, 5 );
+		static const byte mcucr_PUD = BIT( byte, 4 );
+		static const byte mcucr_IVSEL = BIT( byte, 1 );
+		static const byte mcucr_IVCE = BIT( byte, 0 );
+		//
+		static const byte mask_MCUCR = mcucr_BODS | mcucr_BODSE | mcucr_PUD | mcucr_IVSEL | mcucr_IVCE;
+		
+
+		//
+		//	The MCU Status Register
+		//	=======================
+		//
+		byte		_mcusr;
+		//
+		//	Individual bit names.
+		//
+		static const byte mcusr_WDRF = BIT( byte, 3 );
+		static const byte mcusr_BORF = BIT( byte, 2 );
+		static const byte mcusr_EXTRF = BIT( byte, 1 );
+		static const byte mcusr_PORF = BIT( byte, 0 );
+		//
+		static const byte mask_MCUSR = mcusr_WDRF | mcusr_BORF | mcusr_EXTRF | mcusr_PORF;
+
+		//
+		//	The WDTCSR Watch Dog Control Register
 		//	=====================================
 		//
-		//	Define IO ports where the RAM registers are located.
+		byte		_wdtcsr;
 		//
-		static const word ram_z_pointer = 0x3B;
-		static const word ram_y_pointer = 0x3A;
-		static const word ram_x_pointer = 0x39;
-		static const word ram_d_pointer = 0x38;
-		//
-		//	Define pointers to their actual location in memory.
-		//
-		byte		*_ram_z,
-				*_ram_y,
-				*_ram_x,
-				*_ram_d;
+		static const byte wdtcsr_WDIF = BIT( byte, 7 );
+		static const byte wdtcsr_WDIE = BIT( byte, 6 );
+		static const byte wdtcsr_WDP3 = BIT( byte, 5 );
+		static const byte wdtcsr_WDCE = BIT( byte, 4 );
+		static const byte wdtcsr_WDE = BIT( byte, 3 );
+		static const byte wdtcsr_WDP2 = BIT( byte, 2 );
+		static const byte wdtcsr_WDP1 = BIT( byte, 1 );
+		static const byte wdtcsr_WDP0 = BIT( byte, 0 );
 
 		//
-		//	SPMCSR the "Store Program Memory Control and Status Register"
+		//	The watchdog count down and reset values..
 		//
-		static const word self_programming = 0x37;
+		dword		_wdt_remaining,
+				_wdt_reset;
+		byte		_wdt_window;
+		bool		_wdt_enabled;
 
 	public:
 		//
 		//	AVR_CPU CONSTRUCTOR
 		//	=====================
+{BC}
+		In practical circumstances the type create here, AVR_CPU, is
+		inevitably cyclicly linked with other classes, and so it is
+		actually impossible to have all object initialise themselves
+		in their constructor.
+
+		As this is the largest and, probably, most important class I
+		have chosen to break this loop dependency here.  The constructor
+		will do nothing, and initialise nothing.
+
+		To actually initialise the object the 'construct' method should
+		be used prior to any other methods.
+{B}
 		//
-		//	The AVR class emulates a number of AVR class CPUs, selectable
-		//	when the object is initialised.
+		//	Stub Constructor definition
 		//
-		AVR_CPU(		AVR_Type	cpu,
-					byte		pas,		// Program Address size (bits)
-					Flash		*program,	
-					Memory		*data,
-					Memory		*regs,
-					Memory		*io,
-					Memory		*ext_io,
-					Memory		*sram,
-					Interrupts	*irqs,
-					Clock		*clock,
-					Exception	*handler );
+		AVR_CPU( Reporter *handler, int instance, Coverage *track );
 {BS}
 		//
 		//	AVR_CPU CONSTRUCTOR
 		//	=====================
 		//
+		AVR_CPU::AVR_CPU( Reporter *handler, int instance, Coverage *track ) {
+			_constructed = false;
+			//
+			//	Save the tracking and error handler.
+			//
+			_reporter = handler;
+			_instance = instance;
+			_track = track;
+		}
+{B}
+		//
 		//	The AVR class emulates a number of AVR class CPUs, selectable
 		//	when the object is initialised.
 		//
-		AVR_CPU::AVR_CPU(	AVR_Type	cpu,
+		void construct(		AVR_InstSet	cpu,
 					byte		pas,		// Program Address size (bits)
-					Flash		*program,	
+					Flash		*program,
+					Programmer	*programmer,	
+					Fuses		*fuses,	
 					Memory		*data,
-					Memory		*regs,
-					Memory		*io,
-					Memory		*ext_io,
-					Memory		*sram,
+					Memory		*ports,
+					Pin		**pin,
+					word		pins,
 					Interrupts	*irqs,
-					Clock		*clock,
-					Exception	*handler ) {
+					Clock		*clock );
+{BS}
+		//
+		//	constructor
+		//	===========
+		//
+		//	The AVR class emulates a number of AVR class CPUs, selectable
+		//	when the object is initialised.  This is the real constructor
+		//	routine.
+		//
+		void AVR_CPU::construct(	AVR_InstSet	cpu,
+						byte		pas,		// Program Address size (bits)
+						Flash		*program,
+						Programmer	*programmer,	
+						Fuses		*fuses,	
+						Memory		*data,
+						Memory		*ports,
+						Pin		**pin,
+						word		pins,
+						Interrupts	*irqs,
+						Clock		*clock ) {
+			//
+			//	Handle the unusual construction mechanism this
+			//	class uses.
+			//
+			ASSERT( !_constructed );
+			_constructed = true;
 			//
 			//	CPU type, and program address size in bits and bytes.
 			//
@@ -379,14 +497,19 @@ class AVR_CPU : public CPU {
 			//	Flashed program memory.
 			//
 			_program = program;
+			_programmer = programmer;
+			_fuses = fuses;
 			//
 			//	Memory in its various forms.
 			//
 			_data = data;
-			_regs = regs;
-			_io = io;
-			_ext_io = ext_io;
-			_sram = sram;
+			_ports = ports;
+			//
+			//	pins..
+			//
+			_pins = pins;
+			_pin = new Pin *[ _pins ]();
+			for( int i = 0; i < _pins; i++ ) _pin[ i ] = pin[ i ];
 			//
 			//	Interrupt mechanism
 			//
@@ -399,33 +522,20 @@ class AVR_CPU : public CPU {
 			//	Set CPU flags.
 			//
 			_skip_next = false;
-			//
-			//	Save the error handler.
-			//
-			_exception = handler;
-			//
-			//	Set up Status Register pointer.
-			//
-			_sr = _io->at( status_register );
-			//
-			//	Set up the Stack Pointer pointer.
-			//
-			_sp_h = _io->at( stack_pointer_h );
-			_sp_l = _io->at( stack_pointer_l );
-			//
-			//	The Extended Indirect register
-			//
-			_eind = _io->at( extended_indirect );
-			//
-			//	The Extended Memory Registers
-			//
-			_ram_z = _io->at( ram_z_pointer );
-			_ram_y = _io->at( ram_y_pointer );
-			_ram_x = _io->at( ram_x_pointer );
-			_ram_d = _io->at( ram_d_pointer );
 
 			//
-			//	Reset internal registers.
+			//	Initial system is powered on.
+			//
+			_mcusr = mcusr_PORF;
+			_mcucr = 0;
+			_wdtcsr = 0;
+			_wdt_remaining = 0;
+			_wdt_reset = 0;
+			_wdt_window = 0;
+			_wdt_enabled = false;
+			
+			//
+			//	Reset everything.
 			//
 			reset();
 		}
@@ -434,29 +544,62 @@ class AVR_CPU : public CPU {
 		//	Data Registers
 		//	==============
 		//
-		byte read_reg( word reg ) { return( _regs->read( reg )); }
-		void write_reg( word reg, byte val ) { _regs->write( reg, val ); }
+		byte read_reg( word reg ) ;
+		void write_reg( word reg, byte val );
+{BS}
+		byte AVR_CPU::read_reg( word reg ) { return( _reg[ reg ]); }
+		void AVR_CPU::write_reg( word reg, byte val ) { _reg[ reg ] = val; }
+{B}
 
 		//
 		//	IO Registers
 		//	============
 		//
-		byte read_io( word io ) { return( _io->read( io )); }
-		void write_io( word io, byte val ) { _io->write( io, val ); }
+		byte read_port( word adrs );
+		void write_port( word adrs, byte val );
+{BS}
+		byte AVR_CPU::read_port( word adrs ) { return( _ports->read( adrs )); }
+		void AVR_CPU::write_port( word adrs, byte val ) { _ports->write( adrs, val ); }
+{B}
 
 		//
 		//	Flash Memory Access
 		//	===================
 		//
-		word read_flash( word adrs ) { return( _program->read( adrs )); }
+		word read_flash( word adrs );
+		word read_flash_data( word adrs );
+{BS}
+		word AVR_CPU::read_flash( word adrs ) {
+			return( _program->read( adrs ));
+		}
+		word AVR_CPU::read_flash_data( word adrs ) {
+			_track->touch( adrs, Data_Access );
+			return( _program->read( adrs ));
+		}
+{B}
 
 		//
 		//	SRAM Access
 		//	===========
 		//
-		byte read_data( word adrs ) { return( _data->read( adrs )); }
-		void write_data( word adrs, byte val ) { _data->write( adrs, val ); }
-		byte modify_data( word adrs, byte clear, byte set, byte toggle ) { return( _data->modify( adrs, clear, set, toggle )); }
+		byte read_data( word adrs );
+		void write_data( word adrs, byte val );
+		byte modify_data( word adrs, byte clear, byte set, byte toggle );
+{BS}
+		byte AVR_CPU::read_data( word adrs ) {
+			_track->touch( adrs, Read_Access );
+			return( _data->read( adrs ));
+		}
+		void AVR_CPU::write_data( word adrs, byte val ) {
+			_track->touch( adrs, Write_Access );
+			_data->write( adrs, val );
+		}
+		byte AVR_CPU::modify_data( word adrs, byte clear, byte set, byte toggle ) {
+			_track->touch( adrs, Read_Access );
+			_track->touch( adrs, Write_Access );
+			return( _data->modify( adrs, clear, set, toggle ));
+		}
+{B}
 
 		//
 		//	Status Register
@@ -468,56 +611,127 @@ class AVR_CPU : public CPU {
 		//
 		//	Get/Set Status register as a whole.
 		//
-		inline byte get_sr( void ) { return( *_sr ); }
-		inline void set_sr( byte val ) { *_sr = val; }
+		byte get_sr( void );
+		void set_sr( byte val );
+{BS}
+		byte AVR_CPU::get_sr( void ) { return( _sreg ); }
+		void AVR_CPU::set_sr( byte val ) { _sreg = val; }
+{B}
 		
 		//	I: Global Interrupt Enable
 		//	--------------------------
 		//
-		inline bool get_I( void ) { return( *_sr & 0x80 ); }
-		inline void set_I( bool v ) { *_sr = ( *_sr & ~0x80 )|( v? 0x80: 0x00 ); }
+		bool get_I( void );
+		void set_I( bool v );
+{BS}
+		bool AVR_CPU::get_I( void ) { return( _sreg & sreg_I ); }
+		void AVR_CPU::set_I( bool v ) { _sreg = ( _sreg & ~sreg_I )|( v? sreg_I: 0x00 ); }
+{B}
+
 		//
 		//	T: Bit Copy Storage
 		//	-------------------
 		//
-		inline bool get_T( void ) { return( *_sr & 0x40 ); }
-		inline void set_T( bool v ) { *_sr = ( *_sr & ~0x40 )|( v? 0x40: 0x00 ); }
+		bool get_T( void );
+		void set_T( bool v );
+{BS}
+		bool AVR_CPU::get_T( void ) { return( _sreg  & sreg_T ); }
+		void AVR_CPU::set_T( bool v ) { _sreg = ( _sreg & ~sreg_T )|( v? sreg_T: 0x00 ); }
+{B}
+
 		//
 		//	H: Half Carry Flag
 		//	------------------
 		//
-		inline bool get_H( void ) { return( *_sr & 0x20 ); }
-		inline void set_H( bool v ) { *_sr = ( *_sr & ~0x20 )|( v? 0x20: 0x00 ); }
+		bool get_H( void );
+		void set_H( bool v );
+{BS}
+		bool AVR_CPU::get_H( void ) { return( _sreg & sreg_H ); }
+		void AVR_CPU::set_H( bool v ) { _sreg = ( _sreg & ~sreg_H )|( v? sreg_H: 0x00 ); }
+{B}
+
 		//
 		//	S: Sign Bit
 		//	-----------
 		//
-		inline bool get_S( void ) { return( *_sr & 0x10 ); }
-		inline void set_S( bool v ) { *_sr = ( *_sr & ~0x10 )|( v? 0x10: 0x00 ); }
+		bool get_S( void );
+		void set_S( bool v );
+{BS}
+		bool AVR_CPU::get_S( void ) { return( _sreg & sreg_S ); }
+		void AVR_CPU::set_S( bool v ) { _sreg = ( _sreg & ~sreg_S )|( v? sreg_S: 0x00 ); }
+{B}
+
 		//
 		//	V: Two’s Complement Overflow Flag
 		//	---------------------------------
 		//
-		inline bool get_V( void ) { return( *_sr & 0x08 ); }
-		inline void set_V( bool v ) { *_sr = ( *_sr & ~0x08 )|( v? 0x08: 0x00 ); }
+		bool get_V( void );
+		void set_V( bool v );
+{BS}
+		bool AVR_CPU::get_V( void ) { return( _sreg & sreg_V ); }
+		void AVR_CPU::set_V( bool v ) { _sreg = ( _sreg & ~sreg_V )|( v? sreg_V: 0x00 ); }
+{B}
+
 		//
 		//	N: Negative Flag
 		//	----------------
 		//
-		inline bool get_N( void ) { return( *_sr & 0x04 ); }
-		inline void set_N( bool v ) { *_sr = ( *_sr & ~0x04 )|( v? 0x04: 0x00 ); }
+		bool get_N( void );
+		void set_N( bool v );
+{BS}
+		bool AVR_CPU::get_N( void ) { return( _sreg & sreg_N ); }
+		void AVR_CPU::set_N( bool v ) { _sreg = ( _sreg & ~sreg_N )|( v? sreg_N: 0x00 ); }
+{B}
+
 		//
 		//	Z: Zero Flag
 		//	------------
 		//
-		inline bool get_Z( void ) { return( *_sr & 0x02 ); }
-		inline void set_Z( bool v ) { *_sr = ( *_sr & ~0x02 )|( v? 0x02: 0x00 ); }
+		bool get_Z( void );
+		void set_Z( bool v );
+{BS}
+		bool AVR_CPU::get_Z( void ) { return( _sreg & sreg_Z ); }
+		void AVR_CPU::set_Z( bool v ) { _sreg = ( _sreg & ~sreg_Z )|( v? sreg_Z: 0x00 ); }
+{B}
+
 		//
 		//	C: Carry Flag
 		//	-------------
 		//
-		inline bool get_C( void ) { return( *_sr & 0x01 ); }
-		inline void set_C( bool v ) { *_sr = ( *_sr & ~0x01 )|( v? 0x01: 0x00 ); }
+		bool get_C( void );
+		void set_C( bool v );
+{BS}
+		bool AVR_CPU::get_C( void ) { return( _sreg & sreg_C ); }
+		void AVR_CPU::set_C( bool v ) { _sreg = ( _sreg & ~sreg_C )|( v? sreg_C: 0x00 ); }
+{B}
+
+		//
+		//	Unpack the SREG into text
+		//
+		char *expand_sreg( byte sreg, char *buf, int len );
+{BS}
+		char *AVR_CPU::expand_sreg( byte sreg, char *buf, int len ) {
+			ASSERT( buf != NULL );
+			ASSERT( len > 1 );
+		
+			static char flags[ 8 ] = { 'I', 'T', 'H', 'S', 'V', 'N', 'Z', 'C' };  // deliberately backwards
+			
+			byte	p;
+			char	*f, *b;
+
+			len--;		// make allowance for EOS if buffer too small.
+			p = 0x80;
+			f = flags;
+			b = buf;
+			while( p && len-- ) {
+				char c = *f++;
+				*b++ = ( sreg & p )? c : '_';
+				p >>= 1;
+			}
+			*b = EOS;
+			return( buf );
+		}
+{B}
 
 		//
 		//	Stack Pointer.
@@ -525,38 +739,48 @@ class AVR_CPU : public CPU {
 		//
 		//	Routines for storing and retrieving data from the stack.
 		//
-		void push_byte( byte v ) {
-			word sp = get_SP();
-			_data->write( sp--, v );
-			set_SP( sp );
+		void push_byte( byte v );
+{BS}
+		void AVR_CPU::push_byte( byte v ) {
+			_track->touch( _sp, Stack_Access );
+			_data->write( _sp--, v );
 		}
-		void push_word( word v ) {
-			word sp = get_SP();
+{B}
+		void push_word( word v );
+{BS}
+		void AVR_CPU::push_word( word v ) {
 			//
 			//	Push MSB first to maintain little-endian
 			//	data order in memory.
 			//
-			_data->write( sp--, high( v ));
-			_data->write( sp--, low( v ));
-			set_SP( sp );
+			_track->touch( _sp, Stack_Access );
+			_data->write( _sp--, high( v ));
+			_track->touch( _sp, Stack_Access );
+			_data->write( _sp--, low( v ));
 		}
-		byte pop_byte( void ) {
-			word sp = get_SP();
-			byte v = _data->read( ++sp );
-			set_SP( sp );
-			return( v );
+{B}
+		byte pop_byte( void );
+{BS}
+		byte AVR_CPU::pop_byte( void ) {
+			_track->touch( ++_sp, Stack_Access );
+			return( _data->read( _sp ));
 		}
-		word pop_word( void ) {
-			word sp = get_SP();
+{B}
+		word pop_word( void );
+{BS}
+		word AVR_CPU::pop_word( void ) {
 			//
 			//	Pop LSB first as this is the reverse of
 			//	the push action.
 			//
-			byte l = _data->read( ++sp );
-			byte h = _data->read( ++sp );
-			set_SP( sp );
+			_track->touch( ++_sp, Stack_Access );
+			byte l = _data->read( _sp );
+			_track->touch( ++_sp, Stack_Access );
+			byte h = _data->read( _sp );
 			return( combine( h, l ));
 		}
+{B}
+
 		//
 		//	Specific PC push and pop routines (as the size of the
 		//	program counter varies) and a direct set PC function.
@@ -566,7 +790,9 @@ class AVR_CPU : public CPU {
 		//
 		//	Push also assigns a new value to the PC (as per call).
 		//
-		word push_pc( dword adrs ) {
+		word push_pc( dword adrs );
+{BS}
+		word AVR_CPU::push_pc( dword adrs ) {
 			switch( _pas_bytes ) {
 				case 1: {
 					push_byte( low( _pc ));
@@ -582,13 +808,18 @@ class AVR_CPU : public CPU {
 					break;
 				}
 				default: {
-					_exception->raise( Invalid_PAS );
+					ABORT();
+					break;
 				}
 			}
 			_pc = adrs & _pc_mask;
+			_track->touch( _pc, Call_Access );
 			return( _pas_bytes );
 		}
-		word pop_pc( void ) {
+{B}
+		word pop_pc( void );
+{BS}
+		word AVR_CPU::pop_pc( void ) {
 			switch( _pas_bytes ) {
 				case 1: {
 					_pc = pop_byte() & _pc_mask;
@@ -605,11 +836,13 @@ class AVR_CPU : public CPU {
 					break;
 				}
 				default: {
-					_exception->raise( Invalid_PAS );
+					ABORT();
+					break;
 				}
 			}
 			return( _pas_bytes );
 		}
+{B}
 
 		//
 		//	Program Counter
@@ -617,28 +850,57 @@ class AVR_CPU : public CPU {
 		//
 		//	Routines to obtain and manipulate the program counter register.
 		//
-		inline void set_pc( dword adrs ) {
+
+		//
+		//	Jumping the PC about the program space.
+		//
+		void set_pc( dword adrs );
+{BS}
+		void AVR_CPU::set_pc( dword adrs ) {
 			_pc = adrs & _pc_mask;
+			_track->touch( _pc, Jump_Access );
 		}
-		inline dword get_pc( void ) {
+{B}
+
+		//
+		//	Used to move the PC forwards when skipping an
+		//	instruction.
+		//
+		void skip_pc( word dist);
+{BS}
+		void AVR_CPU::skip_pc( word dist ) {
+			_pc = ( _pc + dist ) & _pc_mask;
+		}
+{B}
+		dword get_pc( void );
+{BS}
+		dword AVR_CPU::get_pc( void ) {
 			return( _pc );
 		}
-		inline dword pc_rel( dword rel ) {
+{B}
+		dword pc_rel( dword rel );
+{BS}
+		dword AVR_CPU::pc_rel( dword rel ) {
 			return(( _pc + rel ) & _pc_mask );
 		}
+{B}
 			
 		//
 		//	Read next program word (move PC forward).
 		//
-		word next_opcode( void ) {
+		word next_opcode( void );
+{BS}
+		word AVR_CPU::next_opcode( void ) {
 			word	next;
 			//
 			//	Simples..
 			//
+			_track->touch( _pc, Execute_Access );
 			next = _program->read( _pc );
 			_pc = ( _pc + 1 ) & _pc_mask;
 			return( next );
 		}
+{B}
 
 		//
 		//	Instruction Skipping Enable
@@ -647,48 +909,61 @@ class AVR_CPU : public CPU {
 		//	Mark the next instruction to be executed as "to
 		//	be ignored".
 		//
-		void set_skip_next( void ) {
+		void set_skip_next( void );
+{BS}
+		void AVR_CPU::set_skip_next( void ) {
 			_skip_next = true;
 		}
+{B}
 
 		//
 		//	Exception handling
 		//	==================
 		//
 		//	Links through back to the Exceptions object pointed
-		//	to be '_exception'
+		//	to be '_reporter'
 		//
-		bool raise( Exceptions number ) {
-			return( _exception->raise( number ));
+		bool report( Level lvl, Exception number );
+{BS}
+		bool AVR_CPU::report( Level lvl, Exception number ) {
+			return( _reporter->report( lvl, CPU_Module, _instance, number ));
 		}
-		bool raise( Exceptions number, word arg ) {
-			return( _exception->raise( number, arg ));
+{B}
+		bool report( Level lvl, Exception number, word arg );
+{BS}
+		bool AVR_CPU::report( Level lvl, Exception number, word arg ) {
+			return( _reporter->report( lvl, CPU_Module, _instance, number, "%04X", (int)arg ));
 		}
-		bool raise( Exceptions number, dword arg1, word arg2 ) {
-			return( _exception->raise( number, arg1, arg2  ));
-		}
-		bool raise( Exceptions number, const char *mesg ) {
-			return( _exception->raise( number, mesg ));
-		}
-		bool raise( Exceptions number, const char *file, word line ) {
-			return( _exception->raise( number, file, line ));
-		}
+{B}
 
 		//
 		//	Extended Memory Register access routines
 		//	========================================
 		//
-		inline byte get_eind( void ) { return( *_eind ); }
-		inline byte get_rampz( void ) { return( *_ram_z ); }
-		inline byte get_rampy( void ) { return( *_ram_y ); }
-		inline byte get_rampx( void ) { return( *_ram_x ); }
-		inline byte get_rampd( void ) { return( *_ram_d ); }
-
-		inline void set_eind( byte val ) { *_eind = val; }
-		inline void set_rampz( byte val ) { *_ram_z = val; }
-		inline void set_rampy( byte val ) { *_ram_y = val; }
-		inline void set_rampx( byte val ) { *_ram_x = val; }
-		inline void set_rampd( byte val ) { *_ram_d = val; }
+		byte get_eind( void );
+		byte get_rampz( void );
+		byte get_rampy( void );
+		byte get_rampx( void );
+		byte get_rampd( void );
+{BS}
+		byte AVR_CPU::get_eind( void ) { return( _eind ); }
+		byte AVR_CPU::get_rampz( void ) { return( _ram_z ); }
+		byte AVR_CPU::get_rampy( void ) { return( _ram_y ); }
+		byte AVR_CPU::get_rampx( void ) { return( _ram_x ); }
+		byte AVR_CPU::get_rampd( void ) { return( _ram_d ); }
+{B}
+		void set_eind( byte val );
+		void set_rampz( byte val );
+		void set_rampy( byte val );
+		void set_rampx( byte val );
+		void set_rampd( byte val );
+{BS}
+		void AVR_CPU::set_eind( byte val ) { _eind = val; }
+		void AVR_CPU::set_rampz( byte val ) { _ram_z = val; }
+		void AVR_CPU::set_rampy( byte val ) { _ram_y = val; }
+		void AVR_CPU::set_rampx( byte val ) { _ram_x = val; }
+		void AVR_CPU::set_rampd( byte val ) { _ram_d = val; }
+{B}
 
 		//
 		//	Pseudo 16 bit  Registers, W, X, Y and Z.
@@ -705,19 +980,48 @@ class AVR_CPU : public CPU {
 		//		Y	r29:r28
 		//		Z	r31:r30
 		//
-		word get_word_reg( word r ) { return( combinew( _regs->read( r+1 ), _regs->read( r ))); }
-		inline word get_rw( void ) { return( get_word_reg( 24 )); }
-		inline word get_rx( void ) { return( get_word_reg( 26 )); }
-		inline word get_ry( void ) { return( get_word_reg( 28 )); }
-		inline word get_rz( void ) { return( get_word_reg( 30 )); }
+		//	Alias names for these 16-bit registers.
 		//
-		void set_word_reg( word r, word v ) { _regs->write( r, low( v )); _regs->write( r+1, high( v )); }
-		inline void set_rw( word v ) { set_word_reg( 24, v ); }
-		inline void set_rx( word v ) { set_word_reg( 26, v ); }
-		inline void set_ry( word v ) { set_word_reg( 28, v ); }
-		inline void set_rz( word v ) { set_word_reg( 30, v ); }
-		//
-		word inc_rz( void ) { word z = get_rz(); set_rz( z + 1 ); return( z ); }
+		static const word W_register = 24;
+		static const word X_register = 26;
+		static const word Y_register = 28;
+		static const word Z_register = 30;
+		//	
+		word get_word_reg( word r );
+		word get_rw( void );
+		word get_rx( void );
+		word get_ry( void );
+		word get_rz( void );
+{BS}
+		word AVR_CPU::get_word_reg( word r ) { return( combine( _reg[ r+1 ], _reg[ r ])); }
+		word AVR_CPU::get_rw( void ) { return( get_word_reg( W_register )); }
+		word AVR_CPU::get_rx( void ) { return( get_word_reg( X_register )); }
+		word AVR_CPU::get_ry( void ) { return( get_word_reg( Y_register )); }
+		word AVR_CPU::get_rz( void ) { return( get_word_reg( Z_register )); }
+{B}
+		void set_word_reg( word r, word v );
+		void set_rw( word v );
+		void set_rx( word v );
+		void set_ry( word v );
+		void set_rz( word v );
+{BS}
+		void AVR_CPU::set_word_reg( word r, word v ) {
+			_reg[ r ] = low( v );
+			_reg[ r+1 ] = high( v );
+		}
+		void AVR_CPU::set_rw( word v ) { set_word_reg( W_register, v ); }
+		void AVR_CPU::set_rx( word v ) { set_word_reg( X_register, v ); }
+		void AVR_CPU::set_ry( word v ) { set_word_reg( Y_register, v ); }
+		void AVR_CPU::set_rz( word v ) { set_word_reg( Z_register, v ); }
+{B}
+		word inc_rz( void );
+{BS}
+		word AVR_CPU::inc_rz( void ) {
+			word z = get_rz();
+			set_rz( z + 1 );
+			return( z );
+		}
+{B}
 		
 		//
 		//	Pseudo 24 bit  Registers
@@ -725,96 +1029,170 @@ class AVR_CPU : public CPU {
 		//
 		//	"Z"
 		//
-		dword get_rampz_rz( void ) {
-			return(( (dword)get_rampz() << 16 ) | (dword)get_rz());
+		dword get_rampz_rz( void );
+{BS}
+		dword AVR_CPU::get_rampz_rz( void ) {
+			return(( (dword)_ram_z << 16 ) | (dword)get_rz());
 		}
-		dword inc_rampz_rz( void ) {
-			word z = get_rz();
-			byte p = get_rampz();
-			word c = z + 1;
-			set_rz( c );			// Save incremented z
-			if( !c ) set_rampz( p + 1 );	// increment rampz if z rolled to zero.
-			return(( (dword)p << 16 ) | (dword)z );
+{B}
+		dword inc_rampz_rz( void );
+{BS}
+		dword AVR_CPU::inc_rampz_rz( void ) {
+			word	z;
+			dword	b, a;
+
+			z = get_rz();
+			b = ((dword)_ram_z << 16 ) | z;
+			z = (word)( a = b + 1 );
+			_ram_z = (byte)( a >> 16 );
+			set_rz( z );
+			return( b );
 		}
-		dword dec_rampz_rz( void ) {
-			word z = get_rz() - 1;
-			byte p = get_rampz();
-			set_rz( z );			// Save decremented z
-			if( !z ) set_rampz( p - 1 );	// decrement rampz if z rolled to zero.
-			return(( (dword)p << 16 ) | (dword)z );
+{B}
+		dword dec_rampz_rz( void );
+{BS}
+		dword AVR_CPU::dec_rampz_rz( void ) {
+			word	z;
+			dword	v;
+
+			z = get_rz();
+			v = ((dword)_ram_z << 16 ) | z;
+			z = (word)( v -= 1 );
+			_ram_z = (byte)( v >> 16 );
+			set_rz( z );
+			return( v );
 		}
-		dword get_eind_rz( void ) {
-			return(( (dword)get_eind() << 16 ) | (dword)get_rz());
+{B}
+		dword get_eind_rz( void );
+{BS}
+		dword AVR_CPU::get_eind_rz( void ) {
+			return(( (dword)_eind << 16 ) | (dword)get_rz());
 		}
+{B}
 		//
 		//	"Y"
 		//
-		dword get_rampy_ry( void ) {
-			return(( (dword)get_rampy() << 16 ) | (dword)get_ry());
+		dword get_rampy_ry( void );
+{BS}
+		dword AVR_CPU::get_rampy_ry( void ) {
+			return(( (dword)_ram_y << 16 ) | (dword)get_ry());
 		}
-		dword inc_rampy_ry( void ) {
-			word y = get_ry();
-			byte p = get_rampy();
-			word c = y + 1;
-			set_ry( c );			// Save incremented y
-			if( !c ) set_rampy( p + 1 );	// increment rampy if y rolled to zero.
-			return(( (dword)p << 16 ) | (dword)y );
+{B}
+		dword inc_rampy_ry( void );
+{BS}
+		dword AVR_CPU::inc_rampy_ry( void ) {
+			word	y;
+			dword	b, a;
+
+			y = get_ry();
+			b = ((dword)_ram_y << 16 ) | y;
+			y = (word)( a = b + 1 );
+			_ram_y = (byte)( a >> 16 );
+			set_ry( y );
+			return( b );
 		}
-		dword dec_rampy_ry( void ) {
-			word y = get_ry() - 1;
-			byte p = get_rampy();
-			set_ry( y );			// Save decremented y
-			if( !y ) set_rampy( p - 1 );	// decrement rampy if y rolled to zero.
-			return(( (dword)p << 16 ) | (dword)y );
+{B}
+		dword dec_rampy_ry( void );
+{BS}
+		dword AVR_CPU::dec_rampy_ry( void ) {
+			word	y;
+			dword	v;
+
+			y = get_ry();
+			v = ((dword)_ram_y << 16 ) | y;
+			y = (word)( v -= 1 );
+			_ram_y = (byte)( v >> 16 );
+			set_ry( y );
+			return( v );
 		}
+{B}
 		//
 		//	"X"
 		//
-		dword get_rampx_rx( void ) {
-			return(( (dword)get_rampx() << 16 ) | (dword)get_rx());
+		dword get_rampx_rx( void );
+{BS}
+		dword AVR_CPU::get_rampx_rx( void ) {
+			return(( (dword)_ram_x << 16 ) | (dword)get_rx());
 		}
-		dword inc_rampx_rx( void ) {
-			word x = get_rx();
-			byte p = get_rampx();
-			word c = x + 1;
-			set_rx( c );			// Save incremented x
-			if( !c ) set_rampx( p + 1 );	// increment rampx if x rolled to zero.
-			return(( (dword)p << 16 ) | (dword)x );
+{B}
+		dword inc_rampx_rx( void );
+{BS}
+		dword AVR_CPU::inc_rampx_rx( void ) {
+			word	x;
+			dword	b, a;
+
+			x = get_rx();
+			b = ((dword)_ram_x << 16 ) | x;
+			x = (word)( a = b + 1 );
+			_ram_x = (byte)( a >> 16 );
+			set_rx( x );
+			return( b );
 		}
-		dword dec_rampx_rx( void ) {
-			word x = get_rx() - 1;
-			byte p = get_rampx();
-			set_rx( x );			// Save decremented x
-			if( !x ) set_rampx( p - 1 );	// decrement rampx if x rolled to zero.
-			return(( (dword)p << 16 ) | (dword)x );
+{B}
+		dword dec_rampx_rx( void );
+{BS}
+		dword AVR_CPU::dec_rampx_rx( void ) {
+			word	x;
+			dword	v;
+
+			x = get_rx();
+			v = ((dword)_ram_x << 16 ) | x;
+			x = (word)( v -= 1 );
+			_ram_x = (byte)( v >> 16 );
+			set_rx( x );
+			return( v );
 		}
+{B}
 		//
 		//	"D"
 		//
-		dword get_rampd_const( word v ) {
-			return(( (dword)get_rampd() << 16 ) | (dword)v );
+		dword get_rampd_const( word v );
+{BS}
+		dword AVR_CPU::get_rampd_const( word v ) {
+			return(( (dword)_ram_d << 16 ) | (dword)v );
 		}
+{B}
 
 		//
 		//	The Self Programming API.
 		//	=========================
 		//
-		word execute_spm( void ) {
+		word execute_spm( void );
+{BS}
+		word AVR_CPU::execute_spm( void ) {
 			//
 			//	perform actions indicated by the content of IO( self_programming ).
 			//
 			//	Return the number of clock cycles required to complete this instruction.
 			//
-			raise( Not_Implemented );
-			return( 1 );
+			return( _programmer->call_spm( _pc, false ));
 		}
-		word execute_spm_zp( void ) {
+{B}
+		word execute_spm_zp( void );
+{BS}
+		word AVR_CPU::execute_spm_zp( void ) {
 			//
 			//	As above , but the extended version with register post increment.
 			//
-			raise( Not_Implemented );
-			return( 1 );
+			return( _programmer->call_spm( _pc, true ));
 		}
+{B}
+
+		word execute_lpm( void );
+{BS}
+		word AVR_CPU::execute_lpm( void ) {
+			return( _programmer->call_lpm( _pc, false ));
+		}
+{B}
+		word execute_lpm_zp( void );
+{BS}
+		word AVR_CPU::execute_lpm_zp( void ) {
+			//
+			//	As above , but the extended version with register post increment.
+			//
+			return( _programmer->call_lpm( _pc, true ));
+		}
+{B}
 
 		//
 		//	The Watch Dog Timer.
@@ -824,13 +1202,15 @@ class AVR_CPU : public CPU {
 			//
 			//	Resets the timer associated with the watch dog resetting the MCU.
 			//
+			_reporter->report( Information_Level, CPU_Module, _instance, Watchdog_Reset, "WDT Reset from %d to %d", (int)_wdt_remaining, (int)_wdt_reset );
+			_wdt_remaining = _wdt_reset;
 		}
 
 		//
 		//	Internal state access routines
 		//	==============================
 		//
-		inline AVR_Type mcu_type( void ) { return( _cpu ); }
+		inline AVR_InstSet mcu_type( void ) { return( _cpu ); }
 		inline byte get_pas_bits( void ) { return( _pas_bits ); }
 		inline byte get_pas_bytes( void ) { return( _pas_bytes ); }
 
@@ -846,36 +1226,68 @@ class AVR_CPU : public CPU {
 		//
 		virtual void reset( void );
 {BS}	
-		void AVR_CPU::reset( void ) {	
+		void AVR_CPU::reset( void ) {
+			ASSERT( _constructed );
+			
 			//
 			//	Clear any pending interrupts.
 			//
 			_irqs->reset();
+			
+			//
+			//	Clear all the registers
+			//
+			for( int i = 0; i < GPRegisters; _reg[ i++ ] = 0 );
 
 			//
 			//	Status register cleared; global interrupts
 			//	disabled.
 			//
-			*_sr = 0;
+			_sreg = 0;
 
 			//
 			//	Clearing the RAM* and EIND registers
 			//
-			*_eind = 0;
-			*_ram_z = 0;
-			*_ram_y = 0;
-			*_ram_x = 0;
-			*_ram_d = 0;
+			_eind = 0;
+			_ram_z = 0;
+			_ram_y = 0;
+			_ram_x = 0;
+			_ram_d = 0;
 
 			//
 			//	Stack pointer set to the last byte of memory.
 			//
-			set_SP( _data->capacity()-1 );
-			
+			_sp = _data->capacity()-1;
+
 			//
-			//	Program Counter set start of flash memory.
+			//	Set the boot area address.
 			//
-			_pc = 0x0000;
+			_boot_area = ((dword)_program->total_pages() * (dword)_program->page_size()) - (dword)_fuses->BOOTSZ();
+
+			//
+			//	Set up the initial program counter.
+			//
+			if( _fuses->BOOTRST()) {
+				_pc = _boot_area;
+			}
+			else {
+				_pc = 0x000000;
+			}
+			//
+			//	Initialise the interrupt vector from IVSEL in MCUCR.
+			//
+			if( _mcucr & mcucr_IVSEL ) {
+				_irq_vector = _boot_area;
+			}
+			else {
+				_irq_vector = 0x000000;
+			}
+			//
+			//	Reset the WDT timer
+			//
+			_wdt_remaining = 0;
+			_wdt_reset = 0;
+			_wdt_enabled = false;
 		}
 {B}
 		//
@@ -887,7 +1299,10 @@ class AVR_CPU : public CPU {
 		void AVR_CPU::step( void ) {
 			Instruction	*inst;
 			word		opcode,
+					isize,
 					ticks;
+			
+			ASSERT( _constructed );
 			
 			//
 			//	Step One:	If the _skip_next flag is set
@@ -899,16 +1314,19 @@ class AVR_CPU : public CPU {
 			//			action in the instruction handling code.
 			//
 			if( _skip_next ) {
+				_reporter->report( Information_Level, CPU_Module, _instance, Skip_Instruction, "PC = $%06X", (int)_pc );
 				_skip_next = false;
 				inst = find_instruction( _program->read( _pc ) );
-				ticks = inst->size();
-				set_pc( pc_rel( ticks ));
+				isize = inst->size();
+				skip_pc( isize );
 				//
 				//	The combination of these clock ticks and those
 				//	used by any instruction which sets the _skip_next
-				//	flag gives the correct overall clock count.
+				//	flag gives the correct overall clock count (this
+				//	assumes each fetch for instruction word takes one
+				//	clock tick).
 				//
-				_clock->tick( ticks );
+				_clock->tick( isize, true );
 				//
 				//	We return from here as we have "executed" an
 				//	instruction, albeit just moving the PC and
@@ -928,6 +1346,7 @@ class AVR_CPU : public CPU {
 				//	Look for a pending interrupt..
 				//
 				if( _irqs->find( &irq )) {
+					_reporter->report( Information_Level, CPU_Module, _instance, Accept_Interrupt, "IRQ = %d", (int)irq );
 					//
 					//	We have an interrupt pending, so we need
 					//	to do a couple of things:
@@ -961,9 +1380,11 @@ class AVR_CPU : public CPU {
 					//	which would be right for the very smallest AVR MCUs (those
 					//	with 8 bit program counters?).
 					//
-					//	Remember push_pc returns clocks stacking the saved PC value.
+					//	Remember push_pc returns clocks stacking the saved PC value,
+					//	and that IRQ numbers start at 1, so we need to subtract 1
+					//	before calculating the target address.
 					//
-					_clock->tick( push_pc( (dword)irq << 1 ) + 3 );
+					_clock->tick( push_pc( _irq_vector + ( (dword)( irq - 1 ) << 1 )) + 3, false );
 				}
 			}
 		
@@ -976,10 +1397,10 @@ class AVR_CPU : public CPU {
 			opcode = next_opcode();
 			inst = find_instruction( opcode );
 			if(( ticks = inst->execute( opcode, this ))) {
-				_clock->tick( ticks );
+				_clock->tick( ticks, true );
 			}
 			else {
-				_exception->raise( Unsupported_Instruction, opcode );
+				_reporter->report( Error_Level, CPU_Module, _instance, Unsupported_Instruction, "opcode $%04X", (int)opcode );
 			}
 		}
 {B}
@@ -991,11 +1412,404 @@ class AVR_CPU : public CPU {
 		virtual word disassemble( dword address, Symbols *labels, char *buffer, int max );
 {BS}
 		word AVR_CPU::disassemble( dword address, Symbols *labels, char *buffer, int max ) {
+			ASSERT( _constructed );
+			
 			word		opcode = read_flash( address );
 			Instruction	*inst = find_instruction( opcode );
 			return( inst->disassemble( address, opcode, labels, this, buffer, max ));
 		}
 {B}
+
+		//
+		//	Return the address of the next instruction to execute.
+		//
+		virtual dword next_instruction( void );
+{BS}
+		dword AVR_CPU::next_instruction( void ) {
+			return( _pc );
+		}
+{B}
+
+		//
+		//	Return the size of the next instruction to execute.
+		//
+		virtual word instruction_size( void );
+{BS}
+		word AVR_CPU::instruction_size( void ) {
+			word		opcode = read_flash( _pc );
+			Instruction	*inst = find_instruction( opcode );
+
+			return( inst->size());
+		}
+{B}
+
+		//
+		//	Place textual representation of a register into the buffer supplied.
+		//	return true if there is a register at that index, false otherwise.
+		//	start with register equal to zero.
+		//
+		bool show_register( word reg, Symbols *labels, char *buffer, int max );
+{BS}
+		bool AVR_CPU::show_register( word reg, Symbols *labels, char *buffer, int max ) {
+			word f;
+			
+			//
+			//	We will use reg numbers 0 - 31 for r0 through r31,
+			//	then the following sequence:
+			// 
+			//	Regs:	SP	SREG	PC	EIND
+			//		RAMD	RAMX	RAMY	RAMZ
+			//		MCUCR	MCUSR	BOOT	IRQVec
+			//
+			//	Fuses:	0	1	2	3
+			//
+			if( reg < 32 ) {
+				char	name[ 16 ];
+				
+				snprintf( buffer, max, "%s=%02X", labels->expand( byte_register, reg, name, 16 ), (int)read_reg( reg ));
+				return( true );
+			}
+			switch( reg ) {
+				case 32: {
+					snprintf( buffer, max, "SP=%04X", _sp );
+					return( true );
+				}
+				case 33: {
+					char	sreg[ 9 ];
+
+					snprintf( buffer, max, "SREG=%s", expand_sreg( _sreg, sreg, 9 ));
+					return( true );
+				}
+				case 34: {
+					snprintf( buffer, max, "PC=%04X", _pc );
+					return( true );
+				}
+				case 35: {
+					snprintf( buffer, max, "EIND=%02X", _eind );
+					return( true );
+				}
+				case 36: {
+					snprintf( buffer, max, "RAMD=%02X", _ram_d );
+					return( true );
+				}
+				case 37: {
+					snprintf( buffer, max, "RAMX=%02X", _ram_x );
+					return( true );
+				}
+				case 38: {
+					snprintf( buffer, max, "RAMY=%02X", _ram_y );
+					return( true );
+				}
+				case 39: {
+					snprintf( buffer, max, "RAMZ=%02X", _ram_z );
+					return( true );
+				}
+				case 40: {
+					snprintf( buffer, max, "MCUCR=%02X", _mcucr );
+					return( true );
+				}
+				case 41: {
+					snprintf( buffer, max, "MCUSR=%02X", _mcusr );
+					return( true );
+				}
+				case 42: {
+					snprintf( buffer, max, "BOOT=%04X", _boot_area );
+					return( true );
+				}
+				case 43: {
+					snprintf( buffer, max, "IRQVec=%04X", _irq_vector );
+					return( true );
+				}
+				case 44: {
+					if( _wdt_enabled ) {
+						snprintf( buffer, max, "WDT=%ld", (long int)_wdt_remaining );
+					}
+					else {
+						snprintf( buffer, max, "WDT=disabled" );
+					}
+					return( true );
+				}
+				default: {
+					break;
+				}
+			}
+			if(( f = reg - 45 ) >= 4 ) return( false );
+			snprintf( buffer, max, "fuse[%d]=%02X", f, _fuses->read( f ));
+			return( true );
+		}
+{B}
+		//
+		//	Provide an interface to GPIO pins available on the CPU.
+		//
+		virtual bool get_gpio( word pin );
+		virtual void set_gpio( word pin, bool state );
+{BS}
+		bool AVR_CPU::get_gpio( word pin ) {
+			return( false );
+		}
+		void AVR_CPU::set_gpio( word pin, bool state ) {
+		}
+{B}
+
+		//
+		//	Place textual representation of an object (adrs in domain) into the buffer
+		//	supplied.
+		//
+		//	Return true if there was something there, false otherwise.
+		//
+		virtual bool examine( AddressDomain domain, word adrs, Symbols *labels, char *buffer, int max );
+{BS}
+		bool AVR_CPU::examine( AddressDomain domain, word adrs, Symbols *labels, char *buffer, int max ) {
+			switch( domain ) {
+				case Register_Address: return( show_register( adrs, labels, buffer, max ));
+				case Port_Address: return( _ports->examine( adrs, labels, buffer, max ));
+				case Memory_Address: return( _data->examine( adrs, labels, buffer, max ));
+				case Program_Address: return( _program->examine_words( adrs, labels, buffer, max ));
+				case Data_Address: return( _program->examine_bytes( adrs, labels, buffer, max ));
+				default: ABORT();
+			}
+			return( false );
+		}
+{B}
+
+		//
+		//	The Notification API
+		//	====================
+		//
+		virtual byte read_register( word id );
+		virtual void write_register( word id, byte value );
+		virtual bool examine( word id, Symbols *labels, char *buffer, int max );
+		
+{BS}
+		byte AVR_CPU::read_register( word id ) {
+			switch( id ) {
+				case SPH: return( high( _sp ));
+				case SPL: return( low( _sp ));
+				case SREG: return( _sreg );
+				case RAMD: return( _ram_d );
+				case RAMX: return( _ram_x );
+				case RAMY: return( _ram_y );
+				case RAMZ: return( _ram_z );
+				case EIND: return( _eind );
+				case MCUCR: return( _mcucr );
+				case MCUSR: return( _mcusr );
+				default: {
+					ASSERT( id < GPRegisters );
+					return( _reg[ id ]);
+				}
+			}
+			return( 0 );
+		}
+		void AVR_CPU::write_register( word id, byte value ) {
+			switch( id ) {
+				case SPH: {
+					_sp = combine( value, low( _sp ));
+					break;
+				}
+				case SPL: {
+					_sp = combine( high( _sp ), value );
+					break;
+				}
+				case SREG: {
+					_sreg = value;
+					break;
+				}
+				case RAMD: {
+					_ram_d = value;
+					break;
+				}
+				case RAMX: {
+					_ram_x = value;
+					break;
+				}
+				case RAMY: {
+					_ram_y = value;
+					break;
+				}
+				case RAMZ: {
+					_ram_z = value;
+					break;
+				}
+				case EIND: {
+					_eind = value;
+					break;
+				}
+				case MCUCR: {
+					_mcucr = value & mask_MCUCR;
+					break;
+				}
+				case MCUSR: {
+					_mcusr = value & mask_MCUSR;
+					break;
+				}
+				case WDTCSR: {
+					//
+					//	Bit	7	6	5	4	3	2	1	0
+					//	(0x60)	WDIF	WDIE	WDP3	WDCE	WDE	WDP2	WDP1	WDP0
+					//		R/W	R/W	R/W	R/W	R/W	R/W	R/W	R/W
+					//		0	0	0	0	X	0	0	0
+					//
+					//	Flag can always be cleared.
+					//
+					if( value & wdtcsr_WDIF ) {
+						_wdtcsr &= ~wdtcsr_WDIF;
+						value &= ~wdtcsr_WDIF;
+					}
+					//
+					//	Others require the Change Enable bit to be set.
+					//
+					if( _wdtcsr & wdtcsr_WDCE ) {
+						byte	ps;
+						
+						//
+						//	We can make a change to the watch dog configuration
+						//
+						_wdtcsr = value & ~wdtcsr_WDCE;
+						//
+						//	Evaluate the pre-scaler being requested, any value
+						//	of 10 or above is reserved and will do nothing.
+						//
+						ps = (( value >> 2 ) & 0x80 )|( value & 0x07 );
+						if( ps < 10 ) _wdt_reset = 2048 << ps;
+						//
+						//	Now report the new value..
+						//
+						_reporter->report( Information_Level, CPU_Module, _instance, Config_Change, "WDT Int Flag = %d", (int)(( _wdtcsr & wdtcsr_WDIF ) != 0 ));
+						_reporter->report( Information_Level, CPU_Module, _instance, Config_Change, "WDT Int Enable = %d", (int)(( _wdtcsr & wdtcsr_WDIE ) != 0 ));
+						_reporter->report( Information_Level, CPU_Module, _instance, Config_Change, "WDT cycles = %ld", (long int)_wdt_reset );
+					}
+					else {
+						//
+						//	Otherwise we can only do one thing.
+						//
+						if( value & wdtcsr_WDCE ) {
+							//
+							//	We have set this bit, so we start the
+							//	time window in which to update the register
+							//
+							_reporter->report( Information_Level, CPU_Module, _instance, Config_Change, "WDT change enabled" );
+							_wdtcsr |= wdtcsr_WDCE;
+							_wdt_window = 4;
+						}
+					}
+					break;
+				}
+				default: {
+					//
+					//	This is the "memory mapped" access into the
+					//	register file.
+					//
+					ASSERT( id < GPRegisters );
+					_reg[ id ] = value;
+					break;
+				}
+			}
+		}
+		bool AVR_CPU::examine( word id, Symbols *labels, char *buffer, int max ) {
+			switch( id ) {
+				case SPH: {
+					snprintf( buffer, max, "SPH=%02X", (int)high( _sp ));
+					return( true );
+				}
+				case SPL: {
+					snprintf( buffer, max, "SPL=%02X", (int)low( _sp ));
+					return( true );
+				}
+				case SREG: {
+					char sreg[ 9 ];
+
+					snprintf( buffer, max, "SREG=%s", expand_sreg( _sreg, sreg, 9 ));
+					return( true );
+				}
+				case RAMD: {
+					snprintf( buffer, max, "RAMD=%02X", (int)_ram_d );
+					return( true );
+				}
+				case RAMX: {
+					snprintf( buffer, max, "RAMX=%02X", (int)_ram_x );
+					return( true );
+				}
+				case RAMY: {
+					snprintf( buffer, max, "RAMY=%02X", (int)_ram_y );
+					return( true );
+				}
+				case RAMZ: {
+					snprintf( buffer, max, "RAMZ=%02X", (int)_ram_z );
+					return( true );
+				}
+				case EIND: {
+					snprintf( buffer, max, "EIND=%02X", (int)_eind );
+					return( true );
+				}
+				case MCUCR: {
+					snprintf( buffer, max, "MCUCR=%02X", (int)_mcucr );
+					return( true );
+				}
+				case MCUSR: {
+					snprintf( buffer, max, "MCUSR=%02X", (int)_mcusr );
+					return( true );
+				}
+				case WDTCSR: {
+					snprintf( buffer, max, "WDTCSR=%02X", (int)_wdtcsr );
+					return( true );
+				}
+				default: {
+					ASSERT( id < GPRegisters );
+					snprintf( buffer, max, "R%d = $%02X", (int)id, (int)_reg[ id ]);
+					return( true );
+				}
+			}
+			return( false );
+		}
+{B}
+
+		//
+		//	Clock Ticking API
+		//	=================
+		//
+		virtual void tick( word id, bool inst_end );
+{BS}
+		void AVR_CPU::tick( word id, UNUSED( bool inst_end )) {
+			switch( id ) {
+				case System_Clock: {
+					//
+					//	The system clock ticking.
+					//
+					if( _wdt_window ) {
+						if(( _wdt_window -= 1 ) == 0 ) {
+							_wdtcsr &= ~wdtcsr_WDCE;
+						}
+					}
+					break;
+				}
+				case WDT_Clock: {
+					//
+					//	The 128 KHz clock ticking.
+					//
+					if( _wdt_enabled ) {
+						//
+						//	Watch dog timer counting down ...
+						//
+						_reporter->report( Information_Level, CPU_Module, _instance, Watchdog_tick );
+						if( --_wdt_remaining == 0 ) {
+							//
+							//	Raise watch dog interrupt.
+							//
+							_wdtcsr |= wdtcsr_WDIF;
+							_irqs->raise( WDT_IRQ_Number, &_wdtcsr, wdtcsr_WDIF );
+						}
+					}
+					break;
+				}
+				default: {
+					ABORT();
+					break;
+				}
+			}
+		}
+{B}
+
+
 };
 {B}
 
@@ -1149,6 +1963,15 @@ class Instruction {
 		static inline word arg_d16_d23( word op ) { return((( op >> 4 ) & 0x0007 ) + 16 ); }
 
 		//
+		//	Alias those 16-bit registers which have additional
+		//	roles and names.
+		//
+		static const word W_register = 24;
+		static const word X_register = 26;
+		static const word Y_register = 28;
+		static const word Z_register = 30;
+		
+		//
 		//	RRRR	= Source register pair (R1:R0–R31:R30)
 		//	DDDD	= Destination register pair (R1:R0–R31:R30)
 		//
@@ -1167,8 +1990,7 @@ class Instruction {
 		//
 		//		Routine below returns even numbers 24 through 30 (4 distinct values)
 		//
-		static inline word arg_d24d25_d30d31( word op ) { return((( op >> 3 ) & 0x0006 ) + 24 ); }
-		static inline char arg_WXYZ( word op ) { return( 'W' + (( op >> 4 ) & 0x0003 )); }
+		static inline word arg_d24d25_d30d31( word op ) { return((( op >> 3 ) & 0x0006 ) + W_register ); }
 
 		//
 		//	aaaaaa	= I/O space address
@@ -1235,8 +2057,8 @@ class Instruction {
 		//		____ jjjj jjjj jjjj	12
 		//
 		static dword arg_absolute( word op, word arg ) { return( combinew((( op & 0x0001 ) | (( op >> 3 ) & 0x003E )), arg )); }
-		static dword arg_branch( word op ) { return( sign_extend<dword,7>(( op >> 3 ) & 0x7F )); }
-		static dword arg_relative( word op ) { return( sign_extend<dword,12>( op & 0x0FFF )); }
+		static dword arg_branch( word op ) { return( sign_extend< dword, 7 >(( op >> 3 ) & 0x7F )); }
+		static dword arg_relative( word op ) { return( sign_extend< dword, 12 >( op & 0x0FFF )); }
 
 		//
 		//	Routine returns number of bits set in a byte value.  Rather than
@@ -1368,7 +2190,7 @@ public:
 		//	Called when any decoded opcode does not uniquely identify a
 		//	single specific instruction.
 		//
-		if( state->raise( Illegal_Instruction, state->get_pc()-1, opcode )) return( 0 );
+		if( state->report( Error_Level, Illegal_Instruction, opcode )) return( 0 );
 		//
 		//	Action here will depend on the CPU being
 		//	simulated.
@@ -1376,22 +2198,22 @@ public:
 		//	At present nothing is being done on any CPU.
 		//
 		switch( state->mcu_type()) {
-			case AVR_MCU: {
+			case AVR_Inst: {
 				break;
 			}
-			case AVRe_MCU: {
+			case AVRe_Inst: {
 				break;
 			}
-			case AVRet_MCU: {
+			case AVRet_Inst: {
 				break;
 			}
-			case AVRxm_MCU: {
+			case AVRxm_Inst: {
 				break;
 			}
-			case AVRxt_MCU: {
+			case AVRxt_Inst: {
 				break;
 			}
-			case AVRrc_MCU: {
+			case AVRrc_Inst: {
 				break;
 			}
 			default: {
@@ -1488,13 +2310,17 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		word	d, r;
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+		word	dr,
+			rr;
 		
-		if(( d = arg_d0_d31( opcode )) == ( r = arg_r0_r31( opcode ))) {
-			snprintf( buffer, max, "rol r%d", (int)d );
+		if(( dr = arg_d0_d31( opcode )) == ( rr = arg_r0_r31( opcode ))) {
+			snprintf( buffer, max, "rol %s",	labels->expand( byte_register, dr, ds, symbol_buffer ));
 		}
 		else {
-			snprintf( buffer, max, "adc r%d,r%d", (int)d, (int)r );
+			snprintf( buffer, max, "adc %s,%s",	labels->expand( byte_register, dr, ds, symbol_buffer ),
+								labels->expand( byte_register, rr, rs, symbol_buffer ));
 		}
 		return( 1 );
 	}
@@ -1536,13 +2362,17 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		word	dr, rr;
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+		word	dr,
+			rr;
 		
 		if(( dr = arg_d0_d31( opcode )) == ( rr = arg_r0_r31( opcode ))) {
-			snprintf( buffer, max, "lsl r%d", (int)dr );
+			snprintf( buffer, max, "lsl %s",	labels->expand( byte_register, dr, ds, symbol_buffer ));
 		}
 		else {
-			snprintf( buffer, max, "add r%d,r%d", (int)dr, (int)rr );
+			snprintf( buffer, max, "add %s,%s",	labels->expand( byte_register, dr, ds, symbol_buffer ),
+								labels->expand( byte_register, rr, rs, symbol_buffer ));
 		}
 		return( 1 );
 	}
@@ -1575,7 +2405,7 @@ public:
 		//
 		//	1001 0110 KKdd KKKK
 		//
-		static byte ticks[ AVR_Types ] = { 2, 2, 2, 2, 2, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 2, 2, 2, 2, 2, 0 };
 		
 		word	clocks,
 			dr, dv,
@@ -1597,8 +2427,11 @@ public:
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		char	symbol[ symbol_buffer ];
-		snprintf( buffer, max, "adiw %c,%s", arg_WXYZ( opcode ), labels->expand( word_constant, arg_imm6_w( opcode ), symbol, symbol_buffer ));
+		char	rs[ symbol_buffer ],
+			cs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "adiw %s,%s",	labels->expand( word_register, arg_d24d25_d30d31( opcode ), rs, symbol_buffer ),
+							labels->expand( word_constant, arg_imm6_w( opcode ), cs, symbol_buffer ));
 		return( 1 );
 	}
 } adiw_inst;
@@ -1633,7 +2466,18 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "and r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+		int	dr,
+			rr;
+
+		if(( dr = (int)arg_d0_d31( opcode )) == ( rr = (int)arg_r0_r31( opcode ))) {
+			snprintf( buffer, max, "tst %s",	labels->expand( byte_register, dr, ds, symbol_buffer ));
+		}
+		else {
+			snprintf( buffer, max, "and %s,%s",	labels->expand( byte_register, dr, ds, symbol_buffer ),
+								labels->expand( byte_register, rr, rs, symbol_buffer ));
+		}
 		return( 1 );
 	}
 } and_inst;
@@ -1678,14 +2522,17 @@ public:
 
 		This is an arbitrary distinction.
 {B}
-		char	symbol[ symbol_buffer ];
+		char	ds[ symbol_buffer ],
+			is[ symbol_buffer ];
 		byte	imm8 = arg_imm8( opcode );
 	
 		if( count_ones( imm8 ) > 4 ) {
-			snprintf( buffer, max, "cbr r%d,%s", (int)arg_d16_d31( opcode ), labels->expand( bit_constant, ~imm8, symbol, symbol_buffer ));
+			snprintf( buffer, max, "cbr %s,%s",	labels->expand( byte_register, arg_d16_d31( opcode ), ds, symbol_buffer ),
+								labels->expand( bit_constant, ~imm8, is, symbol_buffer ));
 		}
 		else {
-			snprintf( buffer, max, "andi r%d,%s", (int)arg_d16_d31( opcode ), labels->expand( bit_constant, imm8, symbol, symbol_buffer ));
+			snprintf( buffer, max, "andi %s,%s",	labels->expand( byte_register, arg_d16_d31( opcode ), ds, symbol_buffer ),
+								labels->expand( bit_constant, imm8, is, symbol_buffer ));
 		}
 		return( 1 );
 	}
@@ -1723,7 +2570,9 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "asr r%d", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ];
+		
+		snprintf( buffer, max, "asr %s", labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } asr_inst;
@@ -1785,7 +2634,9 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "bld r%d,%d", arg_d0_d31( opcode ), arg_bit( opcode ));
+		char	ds[ symbol_buffer ];
+		
+		snprintf( buffer, max, "bld %s,%d", labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ), arg_bit( opcode ));
 		return( 1 );
 	}
 } bld_inst;
@@ -1881,12 +2732,12 @@ public:
 		//
 		//	1001 0101 1001 1000
 		//
-		static byte ticks[ AVR_Types ] = { 0, 1, 1, 1, 1, 1 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 1, 1, 1, 1, 1 };
 		
 		word	clocks;
 		
 		if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
-		state->raise( Hardware_Break );
+		state->report( Information_Level, Hardware_Break );
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
@@ -2039,7 +2890,9 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "bst r%d,%d", arg_d0_d31( opcode ), arg_bit( opcode ));
+		char	ds[ symbol_buffer ];
+		
+		snprintf( buffer, max, "bst %s,%d", labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ), arg_bit( opcode ));
 		return( 1 );
 	}
 } bst_inst;
@@ -2062,7 +2915,7 @@ public:
 		//	1001 010j jjjj 111j
 		//	jjjj jjjj jjjj jjjj
 		//
-		static byte ticks[ AVR_Types ] = { 0, STACK( 4 ), STACK( 4 ), STACK( 3 ), STACK( 3 ), 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, STACK( 4 ), STACK( 4 ), STACK( 3 ), STACK( 3 ), 0 };
 	
 		word	clocks,
 			arg;
@@ -2073,7 +2926,7 @@ public:
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
 		char	symbol[ symbol_buffer ];
-		snprintf( buffer, max, "call %s", labels->expand( program_address, address + 2 + arg_absolute( opcode, state->read_flash( address + 1 )), symbol, symbol_buffer ));
+		snprintf( buffer, max, "call %s", labels->expand( program_address, arg_absolute( opcode, state->read_flash( address + 1 )), symbol, symbol_buffer ));
 		return( 2 );
 	}
 	//
@@ -2103,12 +2956,14 @@ public:
 		word	ir;
 		byte	iv;
 	
-		iv = state->read_io( ir = arg_a0_a31( opcode ));
-		state->write_io( ir, iv & ~arg_bit_mask( opcode ));
+		iv = state->read_port( ir = arg_a0_a31( opcode ));
+		state->write_port( ir, iv & ~arg_bit_mask( opcode ));
 		return( 0 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "cbi %d,%d", arg_a0_a31( opcode ), arg_bit( opcode ));
+		char	ps[ symbol_buffer ];
+		
+		snprintf( buffer, max, "cbi %s,%d", labels->expand( port_number, arg_a0_a31( opcode ), ps, symbol_buffer ), arg_bit( opcode ));
 		return( 1 );
 	}
 } cbi_inst;
@@ -2217,7 +3072,9 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "com r%d", arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ];
+		
+		snprintf( buffer, max, "com %s", labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } com_inst;
@@ -2256,7 +3113,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "cp r%d, r%d", arg_d0_d31( opcode ), arg_r0_r31( opcode ));
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "cp %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_register, arg_r0_r31( opcode ), rs, symbol_buffer ));
 		return( 1 );
 	}
 } cp_inst;
@@ -2295,7 +3156,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "cpc r%d, r%d", arg_d0_d31( opcode ), arg_r0_r31( opcode ));
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "cpc %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_register, arg_r0_r31( opcode ), rs, symbol_buffer ));
 		return( 1 );
 	}
 } cpc_inst;
@@ -2334,8 +3199,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		char	symbol[ symbol_buffer ];
-		snprintf( buffer, max, "cpi r%d,%s", (int)arg_d16_d31( opcode ), labels->expand( byte_constant, arg_imm8( opcode ), symbol, symbol_buffer ));
+		char	ds[ symbol_buffer ],
+			is[ symbol_buffer ];
+			
+		snprintf( buffer, max, "cpi %s,%s",	labels->expand( byte_register, arg_d16_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_constant, arg_imm8( opcode ), is, symbol_buffer ));
 		return( 1 );
 	}
 } cpi_inst;
@@ -2379,7 +3247,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "cpse r%d,r%d", arg_d0_d31( opcode ), arg_r0_r31( opcode ));
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "cpse %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_register, arg_r0_r31( opcode ), rs, symbol_buffer ));
 		return( 1 );
 	}
 } cpse_inst;
@@ -2416,7 +3288,9 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "dec r%d", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ];
+		
+		snprintf( buffer, max, "dec %s", labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } dec_inst;
@@ -2438,7 +3312,7 @@ public:
 		//
 		//	1001 0100 kkkk 1011
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, 0, 1, 0, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 0, 1, 0, 0 };
 		
 		word	clocks;
 		
@@ -2453,7 +3327,7 @@ public:
 		unmodified effectively making the clear and cypher text
 		identical.
 {B}
-		if( state->raise( Not_Implemented, opcode )) return( 0 );
+		if( state->report( Error_Level, Not_Implemented, opcode )) return( 0 );
 		
 		return( clocks );
 	}
@@ -2479,7 +3353,7 @@ public:
 		//
 		//	1001 0101 0001 1001
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, STACK( 4 ), STACK( 3 ), STACK( 3 ), 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, STACK( 4 ), STACK( 3 ), STACK( 3 ), 0 };
 		
 		word	clocks;
 
@@ -2510,7 +3384,7 @@ public:
 		//
 		//	1001 0100 0001 1001
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, 2, 2, 2, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 2, 2, 2, 0 };
 		
 		word	clocks;
 
@@ -2555,15 +3429,23 @@ public:
 		//
 		//	1001 0101 1101 1000
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, 3, 3, 3, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 3, 3, 3, 0 };
 		
 		word	clocks,
+			prog,
 			data;
 		dword	adrs;
 
 		if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
+		//
+		//	Cover off the "special" meaning for the LPM instruction.
+		//
+		if(( prog = state->execute_lpm()) > 0 ) return( prog );
+		//
+		//	Carry on with normal meaning.
+		//
 		adrs = state->get_rampz_rz();
-		data = state->read_flash( adrs >> 1 );
+		data = state->read_flash_data( adrs >> 1 );
 		state->write_reg( 0, (( adrs & 1 )? high( data ): low( data )));
 		return( clocks );
 	}
@@ -2586,20 +3468,32 @@ public:
 		//
 		//	1001 000d dddd 0110
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, 3, 3, 3, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 3, 3, 3, 0 };
 		
 		word	clocks,
+			prog,
 			data;
 		dword	adrs;
 
 		if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
+		//
+		//	Cover off the "special" meaning for the LPM instruction.
+		//
+		if(( prog = state->execute_lpm()) > 0 ) return( prog );
+		//
+		//	Carry on with normal meaning.
+		//
 		adrs = state->get_rampz_rz();
-		data = state->read_flash( adrs >> 1 );
+		data = state->read_flash_data( adrs >> 1 );
 		state->write_reg( arg_d0_d31( opcode ), (( adrs & 1 )? high( data ): low( data )));
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "elpm r%d,Z", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ],
+			zs[ symbol_buffer ];
+		
+		snprintf( buffer, max, "elpm %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( word_register, Z_register, zs, symbol_buffer ));
 		return( 1 );
 	}
 } elpm_z_inst;
@@ -2617,20 +3511,32 @@ public:
 		//
 		//	1001 000d dddd 0111
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, 3, 3, 3, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 3, 3, 3, 0 };
 		
 		word	clocks,
+			prog,
 			data;
 		dword	adrs;
 
 		if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
+		//
+		//	Cover off the "special" meaning for the LPM instruction.
+		//
+		if(( prog = state->execute_lpm_zp()) > 0 ) return( prog );
+		//
+		//	Carry on with normal meaning.
+		//
 		adrs = state->inc_rampz_rz();
-		data = state->read_flash( adrs >> 1 );
+		data = state->read_flash_data( adrs >> 1 );
 		state->write_reg( arg_d0_d31( opcode ), (( adrs & 1 )? high( data ): low( data )));
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "elpm r%d,Z+", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ],
+			zs[ symbol_buffer ];
+		
+		snprintf( buffer, max, "elpm %s,%s+",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( word_register, Z_register, zs, symbol_buffer ));
 		return( 1 );
 	}
 } elpm_zp_inst;
@@ -2670,13 +3576,16 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		word	d, r;
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+		word	dr, rr;
 
-		if(( d = arg_d0_d31( opcode )) == ( r = arg_r0_r31( opcode ))) {
-			snprintf( buffer, max, "clr r%d", (int)d );
+		if(( dr = arg_d0_d31( opcode )) == ( rr = arg_r0_r31( opcode ))) {
+			snprintf( buffer, max, "clr %s",	labels->expand( byte_register, dr, ds, symbol_buffer ));
 		}
 		else {
-			snprintf( buffer, max, "eor r%d,r%d", (int)d, (int)r );
+			snprintf( buffer, max, "eor %s,%s",	labels->expand( byte_register, dr, ds, symbol_buffer ),
+								labels->expand( byte_register, rr, rs, symbol_buffer ));
 		}
 		return( 1 );
 	}
@@ -2699,7 +3608,7 @@ public:
 		//
 		//	0000 0011 0ddd 1rrr
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, 2, 2, 2, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 2, 2, 2, 0 };
 		
 		word	clocks,
 			dv, rv,
@@ -2716,9 +3625,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		word	d, r;
-
-		snprintf( buffer, max, "fmul r%d,r%d", (int)arg_d16_d23( opcode ), (int)arg_r16_r23( opcode ));
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "fmul %s,%s",	labels->expand( byte_register, arg_d16_d23( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_register, arg_r16_r23( opcode ), rs, symbol_buffer ));
 		return( 1 );
 	}
 } fmul_inst;
@@ -2740,7 +3651,7 @@ public:
 		//
 		//	0000 0011 1ddd 0rrr
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, 2, 2, 2, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 2, 2, 2, 0 };
 		
 		word	clocks,
 			dv, rv,
@@ -2760,9 +3671,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		word	d, r;
-
-		snprintf( buffer, max, "fmuls r%d,r%d", (int)arg_d16_d23( opcode ), (int)arg_r16_r23( opcode ));
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "fmuls %s,%s",	labels->expand( byte_register, arg_d16_d23( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_register, arg_r16_r23( opcode ), rs, symbol_buffer ));
 		return( 1 );
 	}
 } fmuls_inst;
@@ -2784,7 +3697,7 @@ public:
 		//
 		//	0000 0011 1ddd 0rrr
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, 2, 2, 2, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 2, 2, 2, 0 };
 		
 		word	clocks,
 			dv, rv,
@@ -2804,9 +3717,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		word	d, r;
-
-		snprintf( buffer, max, "fmulsu r%d,r%d", (int)arg_d16_d23( opcode ), (int)arg_r16_r23( opcode ));
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "fmulsu %s,%s",	labels->expand( byte_register, arg_d16_d23( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_register, arg_r16_r23( opcode ), rs, symbol_buffer ));
 		return( 1 );
 	}
 } fmulsu_inst;
@@ -2828,7 +3743,7 @@ public:
 		//
 		//	1001 0101 0000 1001
 		//
-		static byte ticks[ AVR_Types ] = { STACK( 3 ), STACK( 3 ), STACK( 3 ), STACK( 2 ), STACK( 2 ), STACK( 3 )};
+		static byte ticks[ AVR_InstructionTypes ] = { STACK( 3 ), STACK( 3 ), STACK( 3 ), STACK( 2 ), STACK( 2 ), STACK( 3 )};
 		
 		return( ticks[ state->mcu_type()] + state->push_pc( state->get_rz()));
 	}
@@ -2855,7 +3770,7 @@ public:
 		//
 		//	1001 0100 0000 1001
 		//
-		static byte ticks[ AVR_Types ] = { 2, 2, 2, 2, 2, 2 };
+		static byte ticks[ AVR_InstructionTypes ] = { 2, 2, 2, 2, 2, 2 };
 		state->set_pc( state->get_rz());
 		return( ticks[ state->mcu_type()]);
 	}
@@ -2882,11 +3797,15 @@ public:
 		//
 		//	1011 0aad dddd aaaa
 		//
-		state->write_reg( arg_d0_d31( opcode ), state->read_io( arg_a0_a63( opcode )));
+		state->write_reg( arg_d0_d31( opcode ), state->read_port( arg_a0_a63( opcode )));
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "in r%d,%d", (int)arg_d0_d31( opcode ), (int)arg_a0_a63( opcode ));
+		char	ds[ symbol_buffer ],
+			ps[ symbol_buffer ];
+			
+		snprintf( buffer, max, "in %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( port_number, arg_a0_a63( opcode ), ps, symbol_buffer ));
 		return( 1 );
 	}
 } in_inst;
@@ -2923,7 +3842,9 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "inc r%d", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ];
+		
+		snprintf( buffer, max, "inc %s", labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } inc_inst;
@@ -2946,7 +3867,7 @@ public:
 		//	1001 010j jjjj 110j
 		//	jjjj jjjj jjjj jjjj
 		//
-		static byte ticks[ AVR_Types ] = { 0, 3, 3, 3, 3, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 3, 3, 3, 3, 0 };
 	
 		word	clocks,
 			arg;
@@ -2984,7 +3905,7 @@ public:
 		//
 		//	1001 001d dddd 0110
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, 0, 2, 0, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 0, 2, 0, 0 };
 	
 		word	clocks;
 		byte	dr, dv;
@@ -2995,7 +3916,11 @@ public:
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "lac Z,r%d", (int)arg_d0_d31( opcode ));
+		char	zs[ symbol_buffer ],
+			ds[ symbol_buffer ];
+			
+		snprintf( buffer, max, "lac %s,%s",	labels->expand( word_register, Z_register, zs, symbol_buffer ),
+							labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } lac_inst;
@@ -3017,7 +3942,7 @@ public:
 		//
 		//	1001 001d dddd 0101
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, 0, 2, 0, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 0, 2, 0, 0 };
 	
 		word	clocks;
 		byte	dr, dv;
@@ -3028,7 +3953,11 @@ public:
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "las Z,r%d", (int)arg_d0_d31( opcode ));
+		char	zs[ symbol_buffer ],
+			ds[ symbol_buffer ];
+			
+		snprintf( buffer, max, "las %s,%s",	labels->expand( word_register, Z_register, zs, symbol_buffer ),
+							labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } las_inst;
@@ -3050,7 +3979,7 @@ public:
 		//
 		//	1001 001d dddd 0111
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, 0, 2, 0, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 0, 2, 0, 0 };
 	
 		word	clocks;
 		byte	dr, dv;
@@ -3061,7 +3990,11 @@ public:
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "lat Z,r%d", (int)arg_d0_d31( opcode ));
+		char	zs[ symbol_buffer ],
+			ds[ symbol_buffer ];
+			
+		snprintf( buffer, max, "lat %s,%s",	labels->expand( word_register, Z_register, zs, symbol_buffer ),
+							labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } lat_inst;
@@ -3088,7 +4021,7 @@ public:
 		Note:
 			The cycle times associated with this instruction
 			(and probably many other that access through the
-			DS() memory route) have variable cycles counts that
+			DS() memory route) have variable cycle counts that
 			are effectively determined by the address (ie what
 			area of memory you access).  This is especially of
 			note if the RAM is external to the MCU.
@@ -3098,7 +4031,11 @@ public:
 		return( 2 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "ld r%d,X", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ],
+			xs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "ld %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( word_register, X_register, xs, symbol_buffer ));
 		return( 1 );
 	}
 } ld_x_inst;
@@ -3123,7 +4060,11 @@ public:
 		return( 2 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "ld r%d,X+", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ],
+			xs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "ld %s,%s+",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( word_register, X_register, xs, symbol_buffer ));
 		return( 1 );
 	}
 } ld_xp_inst;
@@ -3148,7 +4089,11 @@ public:
 		return( 2 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "ld r%d,-X", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ],
+			xs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "ld %s,-%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( word_register, X_register, xs, symbol_buffer ));
 		return( 1 );
 	}
 } ld_nx_inst;
@@ -3196,13 +4141,18 @@ public:
 		return( 2 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
+		char	ds[ symbol_buffer ],
+			ys[ symbol_buffer ];
 		int	a;
 
 		if(( a = arg_imm6_o( opcode ))) {
-			snprintf( buffer, max, "ldd r%d,Y+%d", (int)arg_d0_d31( opcode ), a );
+			snprintf( buffer, max, "ldd %s,%s+%d",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+								labels->expand( word_register, Y_register, ys, symbol_buffer ),
+								a );
 		}
 		else {
-			snprintf( buffer, max, "ld r%d,Y", (int)arg_d0_d31( opcode ));
+			snprintf( buffer, max, "ld %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+								labels->expand( word_register, Y_register, ys, symbol_buffer ));
 		}
 		return( 1 );
 	}
@@ -3228,7 +4178,11 @@ public:
 		return( 2 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "ld r%d,Y+", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ],
+			ys[ symbol_buffer ];
+			
+		snprintf( buffer, max, "ld %s,%s+",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( word_register, Y_register, ys, symbol_buffer ));
 		return( 1 );
 	}
 } ld_yp_inst;
@@ -3253,7 +4207,11 @@ public:
 		return( 2 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "ld r%d,-Y", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ],
+			ys[ symbol_buffer ];
+			
+		snprintf( buffer, max, "ld %s,-%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( word_register, Y_register, ys, symbol_buffer ));
 		return( 1 );
 	}
 } ld_ny_inst;
@@ -3292,13 +4250,18 @@ public:
 		return( 2 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
+		char	ds[ symbol_buffer ],
+			zs[ symbol_buffer ];
 		int	a;
 
 		if(( a = arg_imm6_o( opcode ))) {
-			snprintf( buffer, max, "ldd r%d,Z+%d", (int)arg_d0_d31( opcode ), a );
+			snprintf( buffer, max, "ldd %s,%s+%d",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+								labels->expand( word_register, Z_register, zs, symbol_buffer ),
+								a );
 		}
 		else {
-			snprintf( buffer, max, "ld r%d,Z", (int)arg_d0_d31( opcode ));
+			snprintf( buffer, max, "ld %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+								labels->expand( word_register, Z_register, zs, symbol_buffer ));
 		}
 		return( 1 );
 	}
@@ -3324,7 +4287,11 @@ public:
 		return( 2 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "ld r%d,Z+", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ],
+			zs[ symbol_buffer ];
+
+		snprintf( buffer, max, "ld %s,%s+",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( word_register, Z_register, zs, symbol_buffer ));
 		return( 1 );
 	}
 } ld_zp_inst;
@@ -3349,7 +4316,11 @@ public:
 		return( 2 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "ld r%d,-Z", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ],
+			zs[ symbol_buffer ];
+
+		snprintf( buffer, max, "ld %s,-%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( word_register, Z_register, zs, symbol_buffer ));
 		return( 1 );
 	}
 } ld_nz_inst;
@@ -3375,8 +4346,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		char	symbol[ symbol_buffer ];
-		snprintf( buffer, max, "ldi r%d,%s", (int)arg_d16_d31( opcode ), labels->expand( byte_constant, arg_imm8( opcode ), symbol, symbol_buffer ));
+		char	ds[ symbol_buffer ],
+			is[ symbol_buffer ];
+			
+		snprintf( buffer, max, "ldi %s,%s",	labels->expand( byte_register, arg_d16_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_constant, arg_imm8( opcode ), is, symbol_buffer ));
 		return( 1 );
 	}
 } ldi_inst;
@@ -3399,7 +4373,7 @@ public:
 		//	1001 000d dddd 0000
 		//	kkkk kkkk kkkk kkkk
 		//
-		static byte ticks[ AVR_Types ] = { 2, 2, 2, 3, 3, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 2, 2, 2, 3, 3, 0 };
 	
 		word	clocks,
 			arg;
@@ -3409,8 +4383,11 @@ public:
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		char	symbol[ symbol_buffer ];
-		snprintf( buffer, max, "lds r%d,%s", (int)arg_d0_d31( opcode ), labels->expand( memory_address, state->read_flash( address + 1 ), symbol, symbol_buffer ));
+		char	ds[ symbol_buffer ],
+			as[ symbol_buffer ];
+		
+		snprintf( buffer, max, "lds %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( memory_address, state->read_flash( address + 1 ), as, symbol_buffer ));
 		return( 2 );
 	}
 	//
@@ -3444,7 +4421,7 @@ set to be ignored.
 			//
 			//	1010 0kkk dddd kkkk
 			//
-			static byte ticks[ AVR_Types ] = { 0, 0, 0, 0, 0, 2 };
+			static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 0, 0, 0, 2 };
 		
 			word	clocks,
 				arg;
@@ -3487,7 +4464,7 @@ public:
 		//
 		//	1001 0101 1100 1000
 		//
-		static byte ticks[ AVR_Types ] = { 3, 3, 3, 3, 3, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 3, 3, 3, 3, 3, 0 };
 		
 		word	clocks,
 			data,
@@ -3495,7 +4472,7 @@ public:
 
 		if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
 		adrs = state->get_rampz_rz();
-		data = state->read_flash( adrs >> 1 );
+		data = state->read_flash_data( adrs >> 1 );
 		state->write_reg( 0, (( adrs & 1 )? high( data ): low( data )));
 		return( clocks );
 	}
@@ -3519,7 +4496,7 @@ public:
 		//
 		//	1001 000d dddd 0100
 		//
-		static byte ticks[ AVR_Types ] = { 3, 3, 3, 3, 3, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 3, 3, 3, 3, 3, 0 };
 		
 		word	clocks,
 			data,
@@ -3527,12 +4504,16 @@ public:
 
 		if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
 		adrs = state->get_rz();
-		data = state->read_flash( adrs >> 1 );
+		data = state->read_flash_data( adrs >> 1 );
 		state->write_reg( arg_d0_d31( opcode ), (( adrs & 1 )? high( data ): low( data )));
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "lpm r%d,Z", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ],
+			zs[ symbol_buffer ];
+
+		snprintf( buffer, max, "lpm %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( word_register, Z_register, zs, symbol_buffer ));
 		return( 1 );
 	}
 } lpm_z_inst;
@@ -3550,7 +4531,7 @@ public:
 		//
 		//	1001 000d dddd 0101
 		//
-		static byte ticks[ AVR_Types ] = { 3, 3, 3, 3, 3, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 3, 3, 3, 3, 3, 0 };
 		
 		word	clocks,
 			data,
@@ -3558,12 +4539,16 @@ public:
 
 		if(( clocks = ticks[ state->mcu_type()]) == 0 ) return( 0 );
 		adrs = state->inc_rz();
-		data = state->read_flash( adrs >> 1 );
+		data = state->read_flash_data( adrs >> 1 );
 		state->write_reg( arg_d0_d31( opcode ), (( adrs & 1 )? high( data ): low( data )));
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "lpm r%d,Z+", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ],
+			zs[ symbol_buffer ];
+
+		snprintf( buffer, max, "lpm %s,%s+",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( word_register, Z_register, zs, symbol_buffer ));
 		return( 1 );
 	}
 } lpm_zp_inst;
@@ -3606,7 +4591,9 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "lsr r%d", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ];
+		
+		snprintf( buffer, max, "lsr %s", labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } lsr_inst;
@@ -3633,7 +4620,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "mov r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "mov %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_register, arg_r0_r31( opcode ), rs, symbol_buffer ));
 		return( 1 );
 	}
 } mov_inst;
@@ -3657,7 +4648,7 @@ public:
 		//
 		//	0000 0001 DDDD RRRR
 		//
-		static byte ticks[ AVR_Types ] = { 0, 1, 1, 1, 1, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 1, 1, 1, 1, 0 };
 		
 		word	clocks,
 			dr, rr;
@@ -3670,29 +4661,11 @@ public:
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		word	dr, rr;
 		char	ds[ symbol_buffer ],
 			rs[ symbol_buffer ];
 
-		//
-		//	This is a little clunky but, for the moment, this
-		//	achieves the desired outcome.
-		//
-		if(( dr = arg_d1d0_d31d30( opcode )) >= 24 ) {
-			ds[ 0 ] = 'W' + (( dr - 24 ) >> 1 );
-			ds[ 1 ] = EOS;
-		}
-		else {
-			snprintf( ds, symbol_buffer, "r%d:r%d", (int)(dr+1), (int)dr );
-		}
-		if(( rr = arg_r1r0_r31r30( opcode )) >= 24 ) {
-			rs[ 0 ] = 'W' + (( rr - 24 ) >> 1 );
-			rs[ 1 ] = EOS;
-		}
-		else {
-			snprintf( rs, symbol_buffer, "r%d:r%d", (int)(rr+1), (int)rr );
-		}
-		snprintf( buffer, max, "movw %s,%s", ds, rs );
+		snprintf( buffer, max, "movw %s,%s",	labels->expand( word_register, arg_d1d0_d31d30( opcode ), ds, symbol_buffer ),
+							labels->expand( word_register, arg_r1r0_r31r30( opcode ), rs, symbol_buffer ));
 		return( 1 );
 	}
 } movw_inst;
@@ -3714,7 +4687,7 @@ public:
 		//
 		//	1001 11rd dddd rrrr
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, 2, 2, 2, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 2, 2, 2, 0 };
 		
 		word	clocks,
 			result;
@@ -3731,7 +4704,11 @@ public:
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "mul r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "mul %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_register, arg_r0_r31( opcode ), rs, symbol_buffer ));
 		return( 1 );
 	}
 } mul_inst;
@@ -3753,7 +4730,7 @@ public:
 		//
 		//	1001 11rd dddd rrrr
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, 2, 2, 2, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 2, 2, 2, 0 };
 		
 		word	clocks,
 			result;
@@ -3772,7 +4749,11 @@ public:
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "muls r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "muls %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_register, arg_r0_r31( opcode ), rs, symbol_buffer ));
 		return( 1 );
 	}
 } muls_inst;
@@ -3794,7 +4775,7 @@ public:
 		//
 		//	0000 0011 0ddd 0rrr
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, 2, 2, 2, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 2, 2, 2, 0 };
 		
 		word	clocks,
 			result;
@@ -3813,7 +4794,11 @@ public:
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "mulsu r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "mulsu %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_register, arg_r0_r31( opcode ), rs, symbol_buffer ));
 		return( 1 );
 	}
 } mulsu_inst;
@@ -3849,7 +4834,9 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "neg r%d", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ];
+		
+		snprintf( buffer, max, "neg %s", labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } neg_inst;
@@ -3909,7 +4896,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "or r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "or %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_register, arg_r0_r31( opcode ), rs, symbol_buffer ));
 		return( 1 );
 	}
 } or_inst;
@@ -3955,14 +4946,18 @@ public:
 
 		This is an arbitrary distinction.
 {B}
+		char	ds[ symbol_buffer ],
+			is[ symbol_buffer ];
+
 		byte	imm8 = arg_imm8( opcode );
-		char	symbol[ symbol_buffer ];
-	
+
 		if( count_ones( imm8 ) < 4 ) {
-			snprintf( buffer, max, "sbr r%d,%s", (int)arg_d16_d31( opcode ), labels->expand( bit_constant, imm8, symbol, symbol_buffer ));
+			snprintf( buffer, max, "sbr %s,%s",	labels->expand( byte_register, arg_d16_d31( opcode ), ds, symbol_buffer ),
+								labels->expand( bit_constant, imm8, is, symbol_buffer ));
 		}
 		else {
-			snprintf( buffer, max, "ori r%d,%s", (int)arg_d16_d31( opcode ), labels->expand( bit_constant, imm8, symbol, symbol_buffer ));
+			snprintf( buffer, max, "ori %s,%s",	labels->expand( byte_register, arg_d16_d31( opcode ), ds, symbol_buffer ),
+								labels->expand( bit_constant, imm8, is, symbol_buffer ));
 		}
 		return( 1 );
 	}
@@ -3985,11 +4980,15 @@ public:
 		//
 		//	1011 1aad dddd aaaa
 		//
-		state->write_io( arg_a0_a63( opcode ), state->read_reg( arg_d0_d31( opcode )));
+		state->write_port( arg_a0_a63( opcode ), state->read_reg( arg_d0_d31( opcode )));
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "out %d,r%d", (int)arg_a0_a63( opcode ), (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ],
+			ps[ symbol_buffer ];
+			
+		snprintf( buffer, max, "out %s,%s",	labels->expand( port_number, arg_a0_a63( opcode ), ps, symbol_buffer ),
+							labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } out_inst;
@@ -4011,13 +5010,15 @@ public:
 		//
 		//	1001 000d dddd 1111
 		//
-		static byte ticks[ AVR_Types ] = { 2, 2, 2, 2, 2, 3 };
+		static byte ticks[ AVR_InstructionTypes ] = { 2, 2, 2, 2, 2, 3 };
 		
-		state->push_byte( state->read_reg( arg_d0_d31( opcode )));
+		state->write_reg( arg_d0_d31( opcode ), state->pop_byte());
 		return( ticks[ state->mcu_type()]);
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "pop r%d", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ];
+		
+		snprintf( buffer, max, "pop %s", labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } pop_inst;
@@ -4039,13 +5040,15 @@ public:
 		//
 		//	1001 001d dddd 1111
 		//
-		static byte ticks[ AVR_Types ] = { 2, 2, 2, 1, 1, 1 };
+		static byte ticks[ AVR_InstructionTypes ] = { 2, 2, 2, 1, 1, 1 };
 		
-		state->write_reg( arg_d0_d31( opcode ), state->pop_byte());
+		state->push_byte( state->read_reg( arg_d0_d31( opcode )));
 		return( ticks[ state->mcu_type()]);
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "push r%d", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ];
+		
+		snprintf( buffer, max, "push %s", labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } push_inst;
@@ -4067,7 +5070,7 @@ public:
 		//
 		//	1101 jjjj jjjj jjjj
 		//
-		static byte ticks[ AVR_Types ] = { STACK( 3 ), STACK( 3 ), STACK( 3 ), STACK( 2 ), STACK( 2 ), STACK( 3 )};
+		static byte ticks[ AVR_InstructionTypes ] = { STACK( 3 ), STACK( 3 ), STACK( 3 ), STACK( 2 ), STACK( 2 ), STACK( 3 )};
 
 		return( ticks[ state->mcu_type()] + state->push_pc( state->pc_rel( arg_relative( opcode ))));
 	}
@@ -4095,7 +5098,7 @@ public:
 		//
 		//	1001 0101 0000 1000
 		//
-		static byte ticks[ AVR_Types ] = { STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 6 )};
+		static byte ticks[ AVR_InstructionTypes ] = { STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 6 )};
 
 		return( ticks[ state->mcu_type()] + state->pop_pc());
 	}
@@ -4122,7 +5125,7 @@ public:
 		//
 		//	1001 0101 0000 1000
 		//
-		static byte ticks[ AVR_Types ] = { STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 6 )};
+		static byte ticks[ AVR_InstructionTypes ] = { STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 4 ), STACK( 6 )};
 
 		state->set_I( true );
 		return( ticks[ state->mcu_type()] + state->pop_pc());
@@ -4198,7 +5201,9 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "lsr r%d", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ];
+		
+		snprintf( buffer, max, "lsr %s", labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } ror_inst;
@@ -4239,7 +5244,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "sbc r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "sbc %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_register, arg_r0_r31( opcode ), rs, symbol_buffer ));
 		return( 1 );
 	}
 } sbc_inst;
@@ -4280,8 +5289,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		char	symbol[ symbol_buffer ];
-		snprintf( buffer, max, "sbci r%d,%s", (int)arg_d0_d31( opcode ), labels->expand( byte_constant, arg_imm8( opcode ), symbol, symbol_buffer ));
+		char	ds[ symbol_buffer ],
+			is[ symbol_buffer ];
+			
+		snprintf( buffer, max, "sbci %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_constant, arg_imm8( opcode ), is, symbol_buffer ));
 		return( 1 );
 	}
 } sbci_inst;
@@ -4303,17 +5315,20 @@ public:
 		//
 		//	1001 1010 aaaa abbb
 		//
-		static byte ticks[ AVR_Types ] = { 2, 2, 2, 1, 1, 1 };
+		static byte ticks[ AVR_InstructionTypes ] = { 2, 2, 2, 1, 1, 1 };
 		
 		word	ir;
 		byte	iv;
 	
-		iv = state->read_io( ir = arg_a0_a31( opcode ));
-		state->write_io( ir, iv | arg_bit_mask( opcode ));
+		iv = state->read_port( ir = arg_a0_a31( opcode ));
+		state->write_port( ir, iv | arg_bit_mask( opcode ));
 		return( ticks[ state->mcu_type()]);
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "sbi %d,%d", arg_a0_a31( opcode ), arg_bit( opcode ));
+		char	ps[ symbol_buffer ];
+		
+		snprintf( buffer, max, "sbi %s,%d",	labels->expand( port_number, arg_a0_a31( opcode ), ps, symbol_buffer ),
+							arg_bit( opcode ));
 		return( 1 );
 	}
 } sbi_inst;
@@ -4335,13 +5350,16 @@ public:
 		//
 		//	1001 1001 aaaa abbb
 		//
-		static byte ticks[ AVR_Types ] = { 1, 1, 1, 2, 1, 1 };
+		static byte ticks[ AVR_InstructionTypes ] = { 1, 1, 1, 2, 1, 1 };
 		
-		if(!( state->read_io( arg_a0_a31( opcode )) & arg_bit_mask( opcode ))) state->set_skip_next();
+		if(!( state->read_port( arg_a0_a31( opcode )) & arg_bit_mask( opcode ))) state->set_skip_next();
 		return( ticks[ state->mcu_type()]);
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "sbic %d,%d", arg_a0_a31( opcode ), arg_bit( opcode ));
+		char	ps[ symbol_buffer ];
+		
+		snprintf( buffer, max, "sbic %s,%d",	labels->expand( port_number, arg_a0_a31( opcode ), ps, symbol_buffer ),
+							arg_bit( opcode ));
 		return( 1 );
 	}
 } sbic_inst;
@@ -4363,13 +5381,16 @@ public:
 		//
 		//	1001 1011 aaaa abbb
 		//
-		static byte ticks[ AVR_Types ] = { 1, 1, 1, 2, 1, 1 };
+		static byte ticks[ AVR_InstructionTypes ] = { 1, 1, 1, 2, 1, 1 };
 		
-		if( state->read_io( arg_a0_a31( opcode )) & arg_bit_mask( opcode )) state->set_skip_next();
+		if( state->read_port( arg_a0_a31( opcode )) & arg_bit_mask( opcode )) state->set_skip_next();
 		return( ticks[ state->mcu_type()]);
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "sbis %d,%d", arg_a0_a31( opcode ), arg_bit( opcode ));
+		char	ps[ symbol_buffer ];
+		
+		snprintf( buffer, max, "sbis %s,%d",	labels->expand( port_number, arg_a0_a31( opcode ), ps, symbol_buffer ),
+							arg_bit( opcode ));
 		return( 1 );
 	}
 } sbis_inst;
@@ -4391,7 +5412,7 @@ public:
 		//
 		//	1001 0111 kkdd kkkk
 		//
-		static byte ticks[ AVR_Types ] = { 2, 2, 2, 2, 2, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 2, 2, 2, 2, 2, 0 };
 		
 		word	clocks,
 			dr, dv,
@@ -4413,8 +5434,11 @@ public:
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		char	symbol[ symbol_buffer ];
-		snprintf( buffer, max, "sbiw %c,%s", arg_WXYZ( opcode ), labels->expand( word_constant, arg_imm6_w( opcode ), symbol, symbol_buffer ));
+		char	rs[ symbol_buffer ],
+			is[ symbol_buffer ];
+
+		snprintf( buffer, max, "sbiw %s,%s",	labels->expand( word_register, arg_d24d25_d30d31( opcode ), rs, symbol_buffer ),
+							labels->expand( word_constant, arg_imm6_w( opcode ), is, symbol_buffer ));
 		return( 1 );
 	}
 } sbiw_inst;
@@ -4446,7 +5470,10 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "sbrc %d,%d", arg_d0_d31( opcode ), arg_bit( opcode ));
+		char	ds[ symbol_buffer ];
+		
+		snprintf( buffer, max, "sbrc %s,%d",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							arg_bit( opcode ));
 		return( 1 );
 	}
 } sbrc_inst;
@@ -4468,11 +5495,16 @@ public:
 		//
 		//	1111 110d dddd 0bbb
 		//
-		if( state->read_reg( arg_d0_d31( opcode )) & arg_bit_mask( opcode )) state->set_skip_next();
+		if( state->read_reg( arg_d0_d31( opcode )) & arg_bit_mask( opcode )) {
+			state->set_skip_next();
+		}
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "sbrs %d,%d", arg_d0_d31( opcode ), arg_bit( opcode ));
+		char	ds[ symbol_buffer ];
+		
+		snprintf( buffer, max, "sbrs %s,%d",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							arg_bit( opcode ));
 		return( 1 );
 	}
 } sbrs_inst;
@@ -4560,7 +5592,14 @@ public:
 		//
 		//	1001 0101 1000 1000
 		//
-		state->raise( Hardware_Sleep );
+		state->report( Information_Level, Hardware_Sleep );
+		//
+		//	Note,
+		//
+		//		At this point the code should initiate a loop
+		//		calling out clock cycles until the interrupt
+		//		sub-system says that an interrupt is pending.
+		//
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
@@ -4596,7 +5635,7 @@ public:
 		//
 		//	1001 0101 1110 1000
 		//
-		static byte ticks[ AVR_Types ] = { 0, 1, 1, 1, 1, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 1, 1, 1, 1, 0 };
 
 		if( ticks[ state->mcu_type()] == 0 ) return( 0 );
 		return( state->execute_spm());
@@ -4624,13 +5663,15 @@ public:
 		//
 		//	1001 0101 1111 1000
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, 0, 1, 1, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 0, 1, 1, 0 };
 
 		if( ticks[ state->mcu_type()] == 0 ) return( 0 );
 		return( state->execute_spm_zp());
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "spm Z+" );
+		char	zs[ symbol_buffer ];
+		
+		snprintf( buffer, max, "spm %s+", labels->expand( word_register, Z_register, zs, symbol_buffer ));
 		return( 1 );
 	}
 } spm_zp_inst;
@@ -4661,7 +5702,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "st X,r%d", (int)arg_d0_d31( opcode ));
+		char	xs[ symbol_buffer ],
+			ds[ symbol_buffer ];
+			
+		snprintf( buffer, max, "st %s,%s",	labels->expand( word_register, X_register, xs, symbol_buffer ),
+							labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } st_x_inst;
@@ -4687,7 +5732,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "st X+,r%d", (int)arg_d0_d31( opcode ));
+		char	xs[ symbol_buffer ],
+			ds[ symbol_buffer ];
+			
+		snprintf( buffer, max, "st %s+,%s",	labels->expand( word_register, X_register, xs, symbol_buffer ),
+							labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } st_xp_inst;
@@ -4713,7 +5762,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "st -X,r%d", (int)arg_d0_d31( opcode ));
+		char	xs[ symbol_buffer ],
+			ds[ symbol_buffer ];
+			
+		snprintf( buffer, max, "st -%s,%s",	labels->expand( word_register, X_register, xs, symbol_buffer ),
+							labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } st_nx_inst;
@@ -4751,13 +5804,19 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
+		char	ys[ symbol_buffer ],
+			ds[ symbol_buffer ];
+			
 		int	a;
 
 		if(( a = arg_imm6_o( opcode ))) {
-			snprintf( buffer, max, "std Y+%d,r%d", a, (int)arg_d0_d31( opcode ) );
+			snprintf( buffer, max, "std %s+%d,%s",	labels->expand( word_register, Y_register, ys, symbol_buffer ),
+								a,
+								labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		}
 		else {
-			snprintf( buffer, max, "st Y,r%d", (int)arg_d0_d31( opcode ));
+			snprintf( buffer, max, "st %s,%s",	labels->expand( word_register, Y_register, ys, symbol_buffer ),
+								labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		}
 		return( 1 );
 	}
@@ -4784,7 +5843,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "st Y+,r%d", (int)arg_d0_d31( opcode ));
+		char	ys[ symbol_buffer ],
+			ds[ symbol_buffer ];
+			
+		snprintf( buffer, max, "st %s+,%s",	labels->expand( word_register, Y_register, ys, symbol_buffer ),
+							labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } st_yp_inst;
@@ -4810,7 +5873,11 @@ public:
 		return( 2 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "st -Y,r%d", (int)arg_d0_d31( opcode ));
+		char	ys[ symbol_buffer ],
+			ds[ symbol_buffer ];
+			
+		snprintf( buffer, max, "st -%s,%s",	labels->expand( word_register, Y_register, ys, symbol_buffer ),
+							labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } st_ny_inst;
@@ -4841,13 +5908,19 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
+		char	zs[ symbol_buffer ],
+			ds[ symbol_buffer ];
+			
 		int	a;
 
 		if(( a = arg_imm6_o( opcode ))) {
-			snprintf( buffer, max, "std Z+%d,r%d", a, (int)arg_d0_d31( opcode ) );
+			snprintf( buffer, max, "std %s+%d,%s",	labels->expand( word_register, Z_register, zs, symbol_buffer ),
+								a,
+								labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		}
 		else {
-			snprintf( buffer, max, "st Z,r%d", (int)arg_d0_d31( opcode ));
+			snprintf( buffer, max, "st %s,%s",	labels->expand( word_register, Z_register, zs, symbol_buffer ),
+								labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		}
 		return( 1 );
 	}
@@ -4874,7 +5947,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "st Z+,r%d", (int)arg_d0_d31( opcode ));
+		char	zs[ symbol_buffer ],
+			ds[ symbol_buffer ];
+			
+		snprintf( buffer, max, "st %s+,%s",	labels->expand( word_register, Z_register, zs, symbol_buffer ),
+							labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } st_zp_inst;
@@ -4900,7 +5977,11 @@ public:
 		return( 2 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "st -Z,r%d", (int)arg_d0_d31( opcode ));
+		char	zs[ symbol_buffer ],
+			ds[ symbol_buffer ];
+			
+		snprintf( buffer, max, "st -%s,%s",	labels->expand( word_register, Z_register, zs, symbol_buffer ),
+							labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } st_nz_inst;
@@ -4923,7 +6004,7 @@ public:
 		//	1001 000d dddd 0000
 		//	kkkk kkkk kkkk kkkk
 		//
-		static byte ticks[ AVR_Types ] = { 2, 2, 2, 2, 2, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 2, 2, 2, 2, 2, 0 };
 	
 		word	clocks,
 			arg;
@@ -4933,8 +6014,11 @@ public:
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		char	symbol[ symbol_buffer ];
-		snprintf( buffer, max, "sts %s,r%d", labels->expand( memory_address, state->read_flash( address + 1 ), symbol, symbol_buffer ), (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ],
+			as[ symbol_buffer ];
+			
+		snprintf( buffer, max, "sts %s,%s",	labels->expand( memory_address, state->read_flash( address + 1 ), as, symbol_buffer ),
+							labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 2 );
 	}
 	//
@@ -4970,7 +6054,7 @@ set to be ignored.
 			//
 			//	1010 1kkk dddd kkkk
 			//
-			static byte ticks[ AVR_Types ] = { 0, 0, 0, 0, 0, 2 };
+			static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 0, 0, 0, 2 };
 		
 			word	clocks,
 				arg;
@@ -5022,7 +6106,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "sub r%d,r%d", (int)arg_d0_d31( opcode ), (int)arg_r0_r31( opcode ));
+		char	ds[ symbol_buffer ],
+			rs[ symbol_buffer ];
+			
+		snprintf( buffer, max, "sub %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_register, arg_r0_r31( opcode ), rs, symbol_buffer ));
 		return( 1 );
 	}
 } sub_inst;
@@ -5063,8 +6151,11 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		char	symbol[ symbol_buffer ];
-		snprintf( buffer, max, "subi r%d,%s", (int)arg_d0_d31( opcode ), labels->expand( byte_constant, arg_imm8( opcode ), symbol, symbol_buffer ));
+		char	ds[ symbol_buffer ],
+			is[ symbol_buffer ];
+
+		snprintf( buffer, max, "subi %s,%s",	labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ),
+							labels->expand( byte_constant, arg_imm8( opcode ), is, symbol_buffer ));
 		return( 1 );
 	}
 } subi_inst;
@@ -5093,7 +6184,9 @@ public:
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "swap r%d", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ];
+		
+		snprintf( buffer, max, "swap %s", labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } swap_inst;
@@ -5148,7 +6241,7 @@ public:
 		//
 		//	1001 001d dddd 0100
 		//
-		static byte ticks[ AVR_Types ] = { 0, 0, 0, 2, 0, 0 };
+		static byte ticks[ AVR_InstructionTypes ] = { 0, 0, 0, 2, 0, 0 };
 		
 		word	clocks;
 		byte	rd, rv;
@@ -5161,7 +6254,9 @@ public:
 		return( clocks );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
-		snprintf( buffer, max, "xch r%d", (int)arg_d0_d31( opcode ));
+		char	ds[ symbol_buffer ];
+		
+		snprintf( buffer, max, "xch %s", labels->expand( byte_register, arg_d0_d31( opcode ), ds, symbol_buffer ));
 		return( 1 );
 	}
 } xch_inst;
@@ -5181,7 +6276,7 @@ execute when they are detected, this is that object.
 
 {BS}
 //
-//	XCH Z,Rd 		DS(Z) <-> Rd
+//	Reserved
 //
 class : public Instruction {
 public:
@@ -5195,12 +6290,15 @@ public:
 		//
 		//	1111 1xxd dddd 1bbb
 		//
-		state->raise( Reserved_Instruction, opcode );
+		state->report( Information_Level, Reserved_Instruction, opcode );
+		//
+		//	What does the MCU do when it executes a reserved instruction?
+		//
 		return( 1 );
 	}
 	virtual word disassemble( dword address, word opcode, Symbols *labels, AVR_CPU *state, char *buffer, int max ) {
 		char	symbol[ symbol_buffer ];
-		snprintf( buffer, max, "reserved %s", labels->expand( program_word, opcode, symbol, symbol_buffer ));
+		snprintf( buffer, max, "reserved %s", labels->expand( word_constant, opcode, symbol, symbol_buffer ));
 		return( 1 );
 	}
 } reserved_inst;
