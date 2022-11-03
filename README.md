@@ -88,7 +88,7 @@ The **first** character *immediately* after the open brace determine the type of
 Type | Meaning | Example
 --- | --- | ---
 Z | Provide the number of bits which define the size of an instruction (typically 8 or 16). Only one per instruction set; must be set before first instruction definition. | ```{Z 8}```
-I | Provide details of an instruction definition.  This is a series of binary numbers, each of S bits long separated by white space.  The final word, not a binary number and not needing to be Z bits long, is the name of the instruction. This is not case sensitive, and is effectively passed through to the output without interpretation. Where bits of the instruction are arguments to the instruction (and are therefore not actually part of the instruction) they should be marked with a period or letter. |  ```{I 00000000 NOP}```  ```{I 0101.... ADD}```
+I | Provide details of an instruction definition.  This is a series of binary numbers, each of Z bits long separated by white space.  The final word, not a binary number and not needing to be Z bits long, is the name of the instruction. This is not case sensitive, and is effectively passed through to the output without interpretation. Where bits of the instruction are arguments to the instruction (and are therefore not actually part of the instruction) they should be marked with a period or letter. |  ```{I 00000000 NOP}```  ```{I 0101.... ADD}```
 F	| Provide formatting details for outputting instruction names. In the absence of a percent symbol this is taken as a prefix, where a percent symbol is provided then this is where the instruction name will be inserted in the output. When no F record has been defined then each record has only a single result value (being the instruction named in the I record). If multiple F records are provided then a corresponding number of result values are created with the decoding data structure. | ```{F opcode_%_func}```
 T	| Provide the name of the array type, defaults "decoder_t".| ```{T tree_node }```
 S	| Define the scope of the table, defaults to 'static', probably the right choice |
@@ -109,7 +109,7 @@ Block Record | Meaning
 BS	| Used to indicate following line belong at the Start of the source file.
 BE	| Used to indicate following line belong at the End of the source file.
 BH	| Used to indicate following lines belong in the header file.
-BC	| Used to indicate following lines are only comments and areto be skipped.
+BC	| Used to indicate following lines are only comments and are to be skipped.
 B	| Used to indicate the end of a block of lines.
 
 
